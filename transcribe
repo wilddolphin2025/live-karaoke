@@ -1,0 +1,2 @@
+#!/bin/bash
+. ~/parakeet/.venv/bin/activate && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True exec python ~/parakeet/transcribe.py "$@"
