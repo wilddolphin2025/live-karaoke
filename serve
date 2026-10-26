@@ -1,2 +1,7 @@
 #!/bin/bash
-cd ~/parakeet && . .venv/bin/activate && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True exec uvicorn asr.api:app --host 0.0.0.0 --port 8000 "$@"
+# WORKERS=2 ./serve  -> each worker capped at ~45% of GPU memory.
+cd ~/parakeet && . .venv/bin/activate
+WORKERS=${WORKERS:-1}
+export GPU_MEM_FRACTION=${GPU_MEM_FRACTION:-$(python -c "print(round(0.9/$WORKERS,2))")}
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+exec uvicorn asr.api:app --host 0.0.0.0 --port 8000 --workers "$WORKERS" "$@"

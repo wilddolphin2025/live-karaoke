@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -33,6 +34,11 @@ class ParakeetEngine:
     """Owns the model. Not thread-safe: call from one worker at a time."""
 
     def __init__(self, model_name: str = MODEL_NAME, chunk_seconds: int = 60):
+        # Hard cap on this process's share of the GPU (e.g. 0.45 with 2 workers).
+        # PyTorch raises OutOfMemoryError at the cap instead of starving neighbours.
+        frac = float(os.environ.get("GPU_MEM_FRACTION", "0"))
+        if frac > 0:
+            torch.cuda.set_per_process_memory_fraction(frac)
         logging.getLogger("nemo_logger").setLevel(logging.ERROR)
         import nemo.collections.asr as nemo_asr  # heavy import, deferred
 
