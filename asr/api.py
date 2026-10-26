@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from asr.engine import MODEL_NAME, SAMPLE_RATE, ParakeetEngine, to_mono_16k
 from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse,
                          Metadata, Results, Utterance)
-from asr.worker import GpuWorker, QueueFull
+from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
 
 MAX_BYTES = 200 * 1024 * 1024
 TIMEOUT_S = 300
@@ -89,6 +89,8 @@ async def listen(
         segments = await asyncio.wait_for(request.app.state.worker.submit(audio), TIMEOUT_S)
     except QueueFull:
         raise ApiError(503, "SERVER_BUSY", "Too many pending requests, retry later.") from None
+    except GpuOutOfMemory:
+        raise ApiError(503, "GPU_OUT_OF_MEMORY", "GPU is out of memory, retry later.") from None
     except asyncio.TimeoutError:
         raise ApiError(504, "TIMEOUT", "Transcription timed out.") from None
 

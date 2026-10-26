@@ -5,12 +5,17 @@ import asyncio
 from dataclasses import dataclass, field
 
 import numpy as np
+import torch
 
 from asr.engine import ParakeetEngine, Segment
 
 
 class QueueFull(Exception):
     """Raised when more jobs are waiting than we are willing to hold."""
+
+
+class GpuOutOfMemory(Exception):
+    """The GPU ran out of memory for this job; the worker recovered and keeps serving."""
 
 
 @dataclass
@@ -53,6 +58,11 @@ class GpuWorker:
                 segments = await asyncio.to_thread(self.engine.transcribe, job.audio)
                 if not job.future.cancelled():
                     job.future.set_result(segments)
+            except torch.OutOfMemoryError:
+                # Free cached blocks so the next job has a chance, then report a retryable error.
+                torch.cuda.empty_cache()
+                if not job.future.cancelled():
+                    job.future.set_exception(GpuOutOfMemory())
             except Exception as exc:  # hand the error to the waiting request
                 if not job.future.cancelled():
                     job.future.set_exception(exc)
