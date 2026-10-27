@@ -67,6 +67,25 @@ async def unhandled_handler(request: Request, exc: Exception):
     return _error(request, 500, "INTERNAL_SERVER_ERROR", "Unexpected error")
 
 
+@app.get("/healthz", include_in_schema=False)
+async def healthz(request: Request):
+    """Liveness: is the process and its GPU worker task alive?"""
+    task = request.app.state.worker._task
+    if task is None or task.done():
+        raise ApiError(500, "WORKER_DEAD", "GPU worker task has stopped.")
+    return {"status": "ok"}
+
+
+@app.get("/readyz", include_in_schema=False)
+async def readyz(request: Request):
+    """Readiness: model loaded and the queue has room. A full queue takes the pod
+    out of the Service so new traffic goes to the other replica."""
+    q = request.app.state.worker.queue
+    if q.full():
+        raise ApiError(503, "SERVER_BUSY", "Queue full.")
+    return {"status": "ready", "pending": q.qsize()}
+
+
 @app.post("/v1/listen", response_model=ListenResponse)
 async def listen(
     request: Request,

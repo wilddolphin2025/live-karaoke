@@ -1,0 +1,39 @@
+# Advertise the single RTX 3050 as 2 schedulable GPUs (time-slicing).
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata: {name: nvidia}
+handler: nvidia
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: nvidia-device-plugin-config, namespace: kube-system}
+data:
+  config.yaml: |
+    version: v1
+    sharing:
+      timeSlicing:
+        resources:
+          - name: nvidia.com/gpu
+            replicas: 2
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: nvidia-device-plugin, namespace: kube-system}
+spec:
+  selector: {matchLabels: {app: nvidia-device-plugin}}
+  template:
+    metadata: {labels: {app: nvidia-device-plugin}}
+    spec:
+      runtimeClassName: nvidia
+      priorityClassName: system-node-critical
+      containers:
+        - name: plugin
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
+          args: ["--config-file=/config/config.yaml"]
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+          volumeMounts:
+            - {name: dp, mountPath: /var/lib/kubelet/device-plugins}
+            - {name: config, mountPath: /config}
+      volumes:
+        - {name: dp, hostPath: {path: /var/lib/kubelet/device-plugins}}
+        - {name: config, configMap: {name: nvidia-device-plugin-config}}

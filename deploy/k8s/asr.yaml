@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: parakeet-asr}
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}   # only 2 GPU slots: replace one at a time
+  selector: {matchLabels: {app: parakeet-asr}}
+  template:
+    metadata: {labels: {app: parakeet-asr}}
+    spec:
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: asr
+          image: parakeet-asr:dev
+          imagePullPolicy: Never          # image is imported locally, no registry
+          ports: [{containerPort: 8000}]
+          env:
+            - {name: GPU_MEM_FRACTION, value: "0.45"}   # memory isolation time-slicing lacks
+          resources:
+            requests: {cpu: "1", memory: 5Gi}
+            limits: {memory: 6Gi, nvidia.com/gpu: 1}
+          startupProbe:                   # model load can take a minute
+            httpGet: {path: /readyz, port: 8000}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8000}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop: {sleep: {seconds: 5}}   # let the Service drop us before SIGTERM
+          volumeMounts: [{name: models, mountPath: /models}]
+      volumes:
+        - name: models                     # reuse the host HF cache: no 2.5 GB redownload
+          hostPath: {path: /home/ykiryanov/.cache/huggingface, type: Directory}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: parakeet-asr}
+spec:
+  type: NodePort
+  selector: {app: parakeet-asr}
+  ports: [{port: 80, targetPort: 8000, nodePort: 30800}]

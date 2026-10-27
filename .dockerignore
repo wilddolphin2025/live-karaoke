@@ -1,0 +1,5 @@
+.venv
+.git
+*.log
+*.wav
+__pycache__
