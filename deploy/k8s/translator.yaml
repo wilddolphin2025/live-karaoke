@@ -1,37 +1,38 @@
-# On-demand private translator: llama.cpp server running a Q4_K_M GGUF of
-# nvidia/Riva-Translate-4B-Instruct-v2. 0 replicas by default; the ASR pods scale it
-# to 1 (and themselves to 1) when a request asks for ?translate=..., which frees the
-# second time-sliced GPU slot and ~1.4 GB VRAM. VRAM is capped by --n-gpu-layers
-# (remaining layers run on CPU) and a small --ctx-size.
+# On-demand private translator: llama.cpp server running google/translategemma-4b-it (Q4_K_M GGUF).
+# 0 replicas by default; the ASR pods scale it to 1 (and themselves to 1) when a request asks for
+# translation, which frees the second time-sliced GPU slot. VRAM is capped by --n-gpu-layers
+# (remaining layers on CPU) and a small --ctx-size: 18 of 34 layers -> ~1.75 GB next to one ASR
+# pod (~1.66 GB) on the 4 GB GPU. The ASR client sends a raw /completion prompt in the model's own
+# chat-template format (asr/translate.py), so no --jinja is needed.
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: riva-translate}
+metadata: {name: translator}
 spec:
   replicas: 0
   strategy: {type: Recreate}
-  selector: {matchLabels: {app: riva-translate}}
+  selector: {matchLabels: {app: translator}}
   template:
-    metadata: {labels: {app: riva-translate}}
+    metadata: {labels: {app: translator}}
     spec:
       runtimeClassName: nvidia
       terminationGracePeriodSeconds: 10
       initContainers:
-        - name: fetch-model   # one-time 2.8 GB download into the shared HF cache
+        - name: fetch-model   # one-time 2.5 GB download into the shared HF cache
           image: curlimages/curl:8.10.1
           securityContext: {runAsUser: 1000, runAsGroup: 1000}
           command: [sh, -c, 'test -s /models/gguf/$(GGUF) || (mkdir -p /models/gguf && curl -fL -o /models/gguf/$(GGUF).part $(GGUF_URL) && mv /models/gguf/$(GGUF).part /models/gguf/$(GGUF))']
           env:
-            - {name: GGUF, value: Riva-Translate-4B-Instruct-v2-Q4_K_M.gguf}
-            - {name: GGUF_URL, value: "https://huggingface.co/shivnathtathe/nvidia_Riva-Translate-4B-Instruct-v2-GGUF/resolve/main/Riva-Translate-4B-Instruct-v2-Q4_K_M.gguf"}
+            - {name: GGUF, value: translategemma-4b-it.Q4_K_M.gguf}
+            - {name: GGUF_URL, value: "https://huggingface.co/mradermacher/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it.Q4_K_M.gguf"}
           volumeMounts: [{name: models, mountPath: /models}]
       containers:
         - name: llama
           image: ghcr.io/ggml-org/llama.cpp:server-cuda
           args:
             - --model
-            - "/models/gguf/Riva-Translate-4B-Instruct-v2-Q4_K_M.gguf"
+            - "/models/gguf/translategemma-4b-it.Q4_K_M.gguf"
             - --alias
-            - "Riva-Translate-4B-Instruct-v2"
+            - "translategemma-4b-it"
             - --host
             - "0.0.0.0"
             - --port
@@ -44,7 +45,6 @@ spec:
             - "1"
             - --threads
             - "8"
-            - --jinja
           env:
             - {name: N_GPU_LAYERS, value: "18"}
           ports: [{containerPort: 8080}]
@@ -69,7 +69,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: riva-translate}
+metadata: {name: translator}
 spec:
-  selector: {app: riva-translate}
+  selector: {app: translator}
   ports: [{port: 8080, targetPort: 8080}]

@@ -1,10 +1,11 @@
-"""On-demand translation with nvidia/Riva-Translate-4B-Instruct-v2 (llama.cpp server).
+"""On-demand translation with google/translategemma-4b-it via a llama.cpp server.
 
 Pieces:
-  * language tables + Riva prompt building (mirrors the model card's chat template)
-  * TranslatorClient: llama.cpp /completion calls, one segment at a time
+  * language table + prompt building (mirrors the model's chat template, sent as a raw
+    /completion prompt so llama.cpp needs no template support)
+  * TranslatorClient: llama.cpp /completion calls, one segment at a time, echo check + retries
   * ModeController: flips the cluster between "asr" mode (2 ASR pods) and
-    "translate" mode (1 ASR pod + riva-translate) by patching Deployment scales
+    "translate" mode (1 ASR pod + translator) by patching Deployment scales
     through the Kubernetes API with the pod's ServiceAccount token.
 """
 from __future__ import annotations
@@ -13,6 +14,8 @@ import asyncio
 import logging
 import os
 import re
+import json
+from pathlib import Path
 import ssl
 import time
 from datetime import datetime, timezone
@@ -21,22 +24,27 @@ import httpx
 
 log = logging.getLogger("translate")
 
-# Codes and names exactly as the Riva-Translate-4B-Instruct-v2 chat template uses them.
-LANGUAGES: dict[str, str] = {
-    "en": "English", "ar": "Arabic", "bg": "Bulgarian", "cs": "Czech", "da": "Danish",
-    "de": "German", "el": "Greek", "es": "European Spanish", "es-es": "European Spanish",
-    "es-us": "Latin American Spanish", "et": "Estonian", "fi": "Finnish", "fr": "French",
-    "hi": "Hindi", "hr": "Croatian", "hu": "Hungarian", "id": "Indonesian", "it": "Italian",
-    "ja": "Japanese", "ko": "Korean", "lt": "Lithuanian", "lv": "Latvian", "nl": "Dutch",
-    "no": "Norwegian", "pl": "Polish", "pt": "Brazilian Portuguese", "pt-br": "Brazilian Portuguese",
-    "pt-pt": "European Portuguese", "ro": "Romanian", "ru": "Russian", "sk": "Slovak",
-    "sl": "Slovenian", "sv": "Swedish", "th": "Thai", "tr": "Turkish", "uk": "Ukrainian",
-    "vi": "Vietnamese", "zh": "Simplified Chinese", "zh-cn": "Simplified Chinese",
-    "zh-tw": "Traditional Chinese",
-}
-_BY_NAME = {v.lower(): k for k, v in reversed(list(LANGUAGES.items()))}
+# ---- TranslateGemma: the 581 codes (BCP-47-ish, e.g. pt-BR, zh-TW, sr-Latn) of its chat template,
+# extracted from the GGUF's tokenizer.chat_template. We accept all of them; /v1/info lists the 55
+# languages Google evaluated (WMT24++), see TRANSLATEGEMMA_MAIN.
+_TG = json.loads((Path(__file__).with_name("translategemma_languages.json")).read_text(encoding="utf-8"))
+TRANSLATEGEMMA_CODES: dict[str, str] = {k.lower(): k for k in _TG}      # lookup key -> template code
+TRANSLATEGEMMA_LANGUAGES: dict[str, str] = {k.lower(): v for k, v in _TG.items()}
+TRANSLATEGEMMA_MAIN = sorted("""ar bg bn ca cs da de el en es et fa fi fr gu he hi hr hu id is it ja kn ko lt
+    lv ml mr nl no pa pl pt pt-br pt-pt ro ru sk sl sr sv sw ta te th tl tr uk ur vi zh zh-tw zu""".split())
+
+MODEL_NAME = "google/translategemma-4b-it (Q4_K_M GGUF)"
+STOP = ["<end_of_turn>", "<start_of_turn>"]
+LANGUAGES: dict[str, str] = TRANSLATEGEMMA_LANGUAGES   # every accepted code -> name
+ADVERTISED: list[str] = TRANSLATEGEMMA_MAIN             # what /v1/info lists
+_BY_NAME: dict[str, str] = {}
+for _k, _v in reversed(list(LANGUAGES.items())):
+    if "-" not in _k or _v.lower() not in _BY_NAME:
+        _BY_NAME[_v.lower()] = _k
 _BY_NAME.update({"spanish": "es", "portuguese": "pt", "chinese": "zh",
-                 "brazilian portuguese": "pt-br", "latin american spanish": "es-us"})
+                 "brazilian portuguese": "pt-br", "european portuguese": "pt-pt", "latin american spanish":
+                 "es-mx", "traditional chinese": "zh-tw",
+                 "simplified chinese": "zh"})
 MAX_TARGETS = 2
 
 
@@ -72,23 +80,41 @@ def parse_targets(raw: str) -> list[str]:
 
 
 def build_prompt(text: str, target: str, source: str | None = None, strict: bool = False) -> str:
-    """Raw prompt identical to the model's chat template output (add_generation_prompt=True).
+    """Identical to TranslateGemma's chat template (type=text, add_generation_prompt=True), minus the
+    BOS token, which llama.cpp adds when tokenizing. The template requires a source language; when
+    it is unknown we keep the same wording with "the original" in place of the source name.
+    strict=True (echo retry) adds one sentence to the template's own instruction block."""
+    tc, tl = TRANSLATEGEMMA_CODES[target], TRANSLATEGEMMA_LANGUAGES[target]
+    if source and source in TRANSLATEGEMMA_CODES:
+        sc, sl = TRANSLATEGEMMA_CODES[source], TRANSLATEGEMMA_LANGUAGES[source]
+        intro = f"You are a professional {sl} ({sc}) to {tl} ({tc}) translator."
+        orig = f"{sl} text"
+    else:
+        sl, intro, orig = "", f"You are a professional translator into {tl} ({tc}).", "text"
+    p = (f"<start_of_turn>user\n{intro} Your goal is to accurately convey the meaning and nuances of the "
+         f"original {orig} while adhering to {tl} grammar, vocabulary, and cultural sensitivities.\n"
+         f"Produce only the {tl} translation, without any additional explanations or commentary. ")
+    if strict:
+        p += (f"Translate every word, including repeated phrases and names in context; never copy the "
+              f"{orig} unchanged. ")
+    p += f"Please translate the following {orig} into {tl}:\n\n\n{text.strip()}<end_of_turn>\n<start_of_turn>model\n"
+    return p
 
-    With a known source we get the specific system message; for auto we use the
-    template's generic 'You are a translation expert.' but still name the target."""
-    tgt = LANGUAGES[target]
-    src = LANGUAGES.get(source or "")
-    system = (f"You are an expert at translating text from {src} to {tgt}." if src
-              else "You are a translation expert.")
-    user = f"What is the {tgt} translation of the sentence: {text.strip()}"
-    if strict:  # retry after an echo: insist on the target language, every word translated
-        system += f" Always answer in {tgt} only, translating every word; never repeat the original text."
-    return f"<s>System\n{system}</s>\n<s>User\n{user}</s>\n<s>Assistant\n"
+
+def clean_output(src: str, out: str) -> str:
+    """Drop quotes the model wraps around a whole answer when the source had none."""
+    o = out.strip()
+    pairs = [('"', '"'), ("«", "»"), ("“", "”"), ("„", "“")]
+    s = src.strip()
+    for a, b in pairs:
+        if len(o) > 2 and o.startswith(a) and o.endswith(b) and not s.startswith(a) and a not in o[1:-1] and b not in o[1:-1]:
+            return o[1:-1].strip()
+    return o
 
 
 # --------------------------------------------------------------------------- source detection
-# The ASR model does not report a language, and "auto" makes Riva-Translate use its generic prompt,
-# where it often echoes the source back (seen with Spanish lyrics). Guess the source from the text:
+# The ASR model does not report a language, and TranslateGemma's template wants a source
+# (and the old Riva model echoed Spanish with a generic prompt). Guess it from the text:
 # script first, then function-word counts for Latin-script languages. Cheap, and good enough to
 # pick the system prompt; callers that know the language pass it explicitly.
 _STOP = {
@@ -179,9 +205,9 @@ class TranslatorUnavailable(Exception):
 
 class TranslatorClient:
     def __init__(self, url: str | None = None, timeout: float = 120):
-        self.url = (url or os.environ.get("TRANSLATOR_URL", "http://riva-translate:8080")).rstrip("/")
+        self.url = (url or os.environ.get("TRANSLATOR_URL", "http://translator:8080")).rstrip("/")
         self.timeout = timeout
-        self.model = os.environ.get("TRANSLATOR_MODEL", "nvidia/Riva-Translate-4B-Instruct-v2 (Q4_K_M GGUF)")
+        self.model = MODEL_NAME
         self._lock = asyncio.Lock()  # llama.cpp runs --parallel 1; queue here, not there
 
     async def healthy(self) -> bool:
@@ -220,7 +246,7 @@ class TranslatorClient:
 
     async def _complete(self, text: str, target: str, source: str | None, strict: bool = False) -> str:
         body = {"prompt": build_prompt(text, target, source, strict), "temperature": 0,
-                "n_predict": max(64, 4 * len(text)), "stop": ["</s>", "<s>"], "cache_prompt": True}
+                "n_predict": max(64, 4 * len(text)), "stop": STOP, "cache_prompt": True}
         async with self._lock:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as c:
@@ -230,7 +256,7 @@ class TranslatorClient:
         if r.status_code == 503:
             raise TranslatorUnavailable()
         r.raise_for_status()
-        return r.json().get("content", "").strip()
+        return clean_output(text, r.json().get("content", ""))
 
 
 # --------------------------------------------------------------------------- mode switching
@@ -240,7 +266,7 @@ DELETION_COST = "controller.kubernetes.io/pod-deletion-cost"
 
 
 class ModeController:
-    """asr mode: parakeet-asr=2, riva-translate=0.  translate mode: parakeet-asr=1, riva-translate=1.
+    """asr mode: parakeet-asr=2, translator=0.  translate mode: parakeet-asr=1, translator=1.
 
     Runs inside every ASR pod (no separate controller). All state lives in the API
     server (Deployment replicas + an annotation), so both pods agree and patches are
@@ -252,7 +278,7 @@ class ModeController:
         self.ns = os.environ.get("POD_NAMESPACE", "default")
         self.pod = os.environ.get("HOSTNAME", "")
         self.asr = os.environ.get("ASR_DEPLOYMENT", "parakeet-asr")
-        self.tr = os.environ.get("TRANSLATOR_DEPLOYMENT", "riva-translate")
+        self.tr = os.environ.get("TRANSLATOR_DEPLOYMENT", "translator")
         self.asr_replicas = int(os.environ.get("ASR_REPLICAS", "2"))
         self.idle_s = float(os.environ.get("TRANSLATE_IDLE_MINUTES", "10")) * 60
         self.enabled = os.path.exists(f"{SA_DIR}/token") and os.environ.get("TRANSLATE_MODE_SWITCH", "1") == "1"

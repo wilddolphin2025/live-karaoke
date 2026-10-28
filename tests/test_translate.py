@@ -12,20 +12,32 @@ from asr import translate as tr
 
 
 def test_prompt_known_source_matches_chat_template():
+    # TranslateGemma chat template (type=text, add_generation_prompt) without BOS (llama.cpp adds it)
     p = tr.build_prompt(" Привет, мир. ", "en", "ru")
-    assert p == ("<s>System\nYou are an expert at translating text from Russian to English.</s>\n"
-                 "<s>User\nWhat is the English translation of the sentence: Привет, мир.</s>\n"
-                 "<s>Assistant\n")
+    assert p == ("<start_of_turn>user\nYou are a professional Russian (ru) to English (en) translator. Your goal is "
+                 "to accurately convey the meaning and nuances of the original Russian text while adhering to English "
+                 "grammar, vocabulary, and cultural sensitivities.\nProduce only the English translation, without any "
+                 "additional explanations or commentary. Please translate the following Russian text into English:"
+                 "\n\n\nПривет, мир.<end_of_turn>\n<start_of_turn>model\n")
 
 
-def test_prompt_auto_source_is_generic():
+def test_prompt_region_codes_and_unknown_source():
     p = tr.build_prompt("hi", "pt-br")
-    assert p.startswith("<s>System\nYou are a translation expert.</s>\n")
-    assert "What is the Brazilian Portuguese translation of the sentence: hi" in p
+    assert "translator into Portuguese (pt-BR)" in p and p.endswith("into Portuguese:\n\n\nhi<end_of_turn>\n<start_of_turn>model\n")
+    assert "Spanish (es-MX)" in tr.build_prompt("x", "ru", "es-mx")
+    strict = tr.build_prompt("hola", "ru", "es", strict=True)
+    assert "never copy the Spanish text unchanged" in strict and strict.count("<start_of_turn>") == 2
+
+
+def test_languages_and_cleanup():
+    assert len(tr.ADVERTISED) >= 50 and {"ru", "en", "es", "uk", "zh-tw", "pt-br"} <= set(tr.ADVERTISED)
+    assert all(c in tr.LANGUAGES for c in tr.ADVERTISED)
+    assert tr.normalize_lang("sr_Latn") == "sr-latn" and tr.normalize_lang("Ukrainian") == "uk"
+    assert tr.clean_output("hola", "«Привет»") == "Привет" and tr.clean_output("a", '"A" and "B"') == '"A" and "B"'
 
 
 @pytest.mark.parametrize("raw,want", [
-    ("en", ["en"]), ("EN", ["en"]), ("pt-BR", ["pt-br"]), ("Brazilian Portuguese", ["pt-br"]),
+    ("en", ["en"]), ("EN", ["en"]), ("pt-BR", ["pt-br"]), ("Brazilian Portuguese", ["pt-br"]), ("es-419x", ["es"]),
     ("en-US", ["en"]), ("zh_TW", ["zh-tw"]), ("en,de", ["en", "de"]), ("en,en", ["en"]),
 ])
 def test_parse_targets(raw, want):
@@ -40,7 +52,7 @@ def test_parse_targets_rejects(raw):
 
 # ---- response shape with fake engine/translator (no model, no lifespan)
 class _FakeTranslator:
-    model = "fake-riva"
+    model = "fake-gemma"
 
     def __init__(self, up=True):
         self.up, self.calls = up, []
@@ -125,7 +137,7 @@ def test_translate_bad_language_400(client):
     assert r.status_code == 400 and "Unsupported translate language" in r.json()["err_msg"]
 
 
-# ---- live end-to-end (server with translate support + riva-translate up)
+# ---- live end-to-end (server with translate support + translator up)
 URL = os.environ.get("ASR_URL", "http://localhost:30800")
 RU = os.path.join(os.path.dirname(__file__), "..", "testdata", "ru")
 

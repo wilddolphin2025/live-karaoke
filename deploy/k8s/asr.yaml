@@ -11,7 +11,7 @@ spec:
     metadata: {labels: {app: parakeet-asr}}
     spec:
       runtimeClassName: nvidia
-      serviceAccountName: parakeet-asr   # may scale parakeet-asr / riva-translate (rbac.yaml)
+      serviceAccountName: parakeet-asr   # may scale parakeet-asr / translator (rbac.yaml)
       terminationGracePeriodSeconds: 60
       containers:
         - name: asr
@@ -20,7 +20,7 @@ spec:
           ports: [{containerPort: 8000}]
           env:
             - {name: GPU_MEM_FRACTION, value: "0.45"}   # memory isolation time-slicing lacks
-            - {name: TRANSLATOR_URL, value: "http://riva-translate:8080"}
+            - {name: TRANSLATOR_URL, value: "http://translator:8080"}
             - {name: TRANSLATE_IDLE_MINUTES, value: "10"}   # back to 2 ASR pods after this idle time
             - {name: ASR_REPLICAS, value: "2"}
             - name: POD_NAMESPACE

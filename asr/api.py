@@ -17,12 +17,12 @@ from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse, Me
                          Paragraph, Paragraphs, Results, Sentence, TranslatedSentence,
                          TranslateRequest, TranslateResponse, Translation, Utterance)
 from asr.sentences import sentences as split_sentences
-from asr.translate import (LANGUAGES, ModeController, TranslatorClient,
+from asr.translate import (ADVERTISED, LANGUAGES, ModeController, TranslatorClient,
                            TranslatorUnavailable, UnsupportedLanguage, normalize_lang,
                            detect_language, parse_targets)
 from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
 
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.6.0"
 GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 HOSTNAME = os.environ.get("HOSTNAME", "unknown")
 MAX_BYTES = 200 * 1024 * 1024
@@ -131,7 +131,8 @@ async def info(request: Request):
         "pod": HOSTNAME,
         "word_timestamps": getattr(engine, "word_timestamps", False),
         "translation": {"model": request.app.state.translator.model,
-                        "languages": sorted(LANGUAGES),
+                        "languages": ADVERTISED,
+                        "accepted_language_codes": len(LANGUAGES),
                         **(await request.app.state.modes.status())},
     }
 
@@ -187,7 +188,7 @@ async def translate_sentences(request: Request, body: TranslateRequest):
             source = detect_language(" ".join(s.text for s in body.sentences))
     except UnsupportedLanguage as e:
         raise ApiError(400, "Bad Request", f"Unsupported language: {e}. "
-                       f"Supported: {', '.join(sorted(LANGUAGES))}") from None
+                       f"Supported: {', '.join(ADVERTISED)} (and regional variants)") from None
     await _ready_translator(request.app)
     out = []
     try:
@@ -216,7 +217,7 @@ async def listen(
             targets = parse_targets(translate)
         except UnsupportedLanguage as e:
             raise ApiError(400, "Bad Request", f"Unsupported translate language: {e}. "
-                           f"Supported: {', '.join(sorted(LANGUAGES))}") from None
+                           f"Supported: {', '.join(ADVERTISED)} (and regional variants)") from None
         await _ready_translator(request.app)  # 503 + Retry-After while warming, before spending ASR time
 
     body = await request.body()

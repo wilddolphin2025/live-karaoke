@@ -4,14 +4,9 @@ export const BUILD: string = typeof __BUILD__ === "string" ? __BUILD__ : "dev";
 export const DEFAULT_SERVER = "http://192.168.8.226:30800";
 export const LANGS = ["auto","bg","cs","da","de","el","en","es","et","fi","fr","hr","hu","it","lt","lv","mt","nl","pl","pt","ro","ru","sk","sl","sv","uk"];
 
-// Target languages of nvidia/Riva-Translate-4B-Instruct-v2 (sent as ?translate=<code>, Deepgram's name).
-export const TRANSLATE_LANGS: [string, string][] = [["en","English"],["ar","Arabic"],["bg","Bulgarian"],["cs","Czech"],
-  ["da","Danish"],["de","German"],["el","Greek"],["es","Spanish (Europe)"],["es-us","Spanish (Latin America)"],["et","Estonian"],
-  ["fi","Finnish"],["fr","French"],["hi","Hindi"],["hr","Croatian"],["hu","Hungarian"],["id","Indonesian"],["it","Italian"],
-  ["ja","Japanese"],["ko","Korean"],["lt","Lithuanian"],["lv","Latvian"],["nl","Dutch"],["no","Norwegian"],["pl","Polish"],
-  ["pt-br","Portuguese (Brazil)"],["pt-pt","Portuguese (Portugal)"],["ro","Romanian"],["ru","Russian"],["sk","Slovak"],
-  ["sl","Slovenian"],["sv","Swedish"],["th","Thai"],["tr","Turkish"],["uk","Ukrainian"],["vi","Vietnamese"],
-  ["zh","Chinese (Simplified)"],["zh-tw","Chinese (Traditional)"]];
+// Target languages offered in the UI: the 55 that google/translategemma-4b-it was evaluated on (WMT24++);
+// the server accepts any code of its template (sent as ?translate=<code>, Deepgram's name).
+export const TRANSLATE_LANGS: [string, string][] = [["en","English"],["ar","Arabic"],["bn","Bengali"],["bg","Bulgarian"],["ca","Catalan"],["zh","Chinese (Simplified)"],["zh-tw","Chinese (Traditional)"],["hr","Croatian"],["cs","Czech"],["da","Danish"],["nl","Dutch"],["et","Estonian"],["fi","Finnish"],["fr","French"],["de","German"],["el","Greek"],["gu","Gujarati"],["he","Hebrew"],["hi","Hindi"],["hu","Hungarian"],["is","Icelandic"],["id","Indonesian"],["it","Italian"],["ja","Japanese"],["kn","Kannada"],["ko","Korean"],["lv","Latvian"],["lt","Lithuanian"],["ml","Malayalam"],["mr","Marathi"],["no","Norwegian"],["fa","Persian"],["pl","Polish"],["pt","Portuguese"],["pt-br","Portuguese (Brazil)"],["pt-pt","Portuguese (Portugal)"],["pa","Punjabi"],["ro","Romanian"],["ru","Russian"],["sr","Serbian"],["sk","Slovak"],["sl","Slovenian"],["es","Spanish"],["sw","Swahili"],["sv","Swedish"],["tl","Tagalog"],["ta","Tamil"],["te","Telugu"],["th","Thai"],["tr","Turkish"],["uk","Ukrainian"],["ur","Urdu"],["vi","Vietnamese"],["zu","Zulu"]];
 export interface Translation { language: string; translation: string }
 export interface Word { word: string; start: number; end: number; punctuated_word?: string }
 export interface Utterance { start: number; end: number; transcript: string; translations?: Translation[] }

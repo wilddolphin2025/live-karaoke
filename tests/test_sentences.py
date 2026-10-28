@@ -78,7 +78,7 @@ def test_translate_endpoint_echoes_timing(client):
                                            "sentences": [{"text": "Привет.", "start": 0.5, "end": 1.4}]})
     assert r.status_code == 200, r.text
     b = r.json()
-    assert b["language"] == "en" and b["source"] == "ru" and b["model"] == "fake-riva" and b["request_id"]
+    assert b["language"] == "en" and b["source"] == "ru" and b["model"] == "fake-gemma" and b["request_id"]
     assert b["sentences"] == [{"text": "Привет.", "start": 0.5, "end": 1.4, "translation": "[en] Привет."}]
     assert api.app.state.modes.ensured == 1
 

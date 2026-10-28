@@ -1,5 +1,5 @@
 # Lets the ASR pods switch between "asr" mode (2 ASR pods) and "translate" mode
-# (1 ASR pod + riva-translate). Namespace-scoped, only what the switch needs.
+# (1 ASR pod + translator). Namespace-scoped, only what the switch needs.
 apiVersion: v1
 kind: ServiceAccount
 metadata: {name: parakeet-asr}
@@ -10,11 +10,11 @@ metadata: {name: parakeet-mode-switch}
 rules:
   - apiGroups: [apps]
     resources: [deployments]
-    resourceNames: [parakeet-asr, riva-translate]
+    resourceNames: [parakeet-asr, translator]
     verbs: [get, patch]            # read replicas/readiness; last-used annotation
   - apiGroups: [apps]
     resources: [deployments/scale]
-    resourceNames: [parakeet-asr, riva-translate]
+    resourceNames: [parakeet-asr, translator]
     verbs: [get, patch]
   - apiGroups: [""]
     resources: [pods]
