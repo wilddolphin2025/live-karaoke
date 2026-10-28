@@ -1,9 +1,18 @@
-import { BUILD, needsTranslation, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, getAudio, getState, putAudio } from "./shared";
+import { BUILD, needsTranslation, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, getAudio, getState, putAudio } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
 const VIDEO_EXT = new Set(["mp4", "mov", "mkv"]);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+// Main view (file, transcript, translation) vs Settings view (options + version info), toggled by the gear.
+const mainView = $("mainview"), settingsView = $("settings"), summary = $("summary");
+const showSettings = (on: boolean) => { settingsView.hidden = !on; mainView.hidden = on; if (!on) updateSummary(); };
+$("gear").addEventListener("click", () => showSettings(true));
+$("back").addEventListener("click", () => showSettings(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !settingsView.hidden) { e.preventDefault(); showSettings(false); } });
+function updateSummary() {
+  summary.textContent = summaryText(lang.value, trBox.checked, trLang.value);
+}
 const server = $<HTMLInputElement>("server"), lang = $<HTMLSelectElement>("lang");
 const trBox = $<HTMLInputElement>("tr"), trLang = $<HTMLSelectElement>("trlang");
 const drop = $<HTMLLabelElement>("drop"), fileInput = $<HTMLInputElement>("file");
@@ -29,7 +38,7 @@ for (const l of LANGS) lang.add(new Option(l, l));
 for (const [code, name] of TRANSLATE_LANGS) trLang.add(new Option(name, code));
 const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto", translate: false, translateTo: "en" }).then((s) => {
   server.value = s.server as string; lang.value = s.language as string;
-  trBox.checked = s.translate as boolean; trLang.value = s.translateTo as string; trLang.disabled = !trBox.checked;
+  trBox.checked = s.translate as boolean; trLang.value = s.translateTo as string; trLang.disabled = !trBox.checked; updateSummary();
 });
 trBox.addEventListener("change", () => { trLang.disabled = !trBox.checked; chrome.storage.local.set({ translate: trBox.checked }); void maybeTranslate(); });
 trLang.addEventListener("change", () => { chrome.storage.local.set({ translateTo: trLang.value }); void maybeTranslate(); });
@@ -112,6 +121,7 @@ async function render(job: JobState) {
   lastJob = job;
   const running = job.phase === "running";
   drop.classList.toggle("busy", running);
+  drop.classList.toggle("loaded", job.phase !== "idle");
   errBox.hidden = job.phase !== "error";
   if (job.phase === "error") errBox.textContent = job.error ?? "Unknown error";
   if (job.fileName) { baseName = job.fileName.replace(/\.[^.]+$/, "") || "transcript"; await loadPlayer(job.fileName); }

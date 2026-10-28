@@ -18,7 +18,11 @@ try {
     await new Promise((r) => setTimeout(r, 300));  // settings load
     return page;
   };
-  const setTick = async (page, on) => { if ((await page.$eval("#tr", (e) => e.checked)) !== on) await page.click("#tr"); };
+  // Translate lives in the Settings view (gear); go there, toggle, come back.
+  const setTick = async (page, on) => {
+    if ((await page.$eval("#tr", (e) => e.checked)) === on) return;
+    await page.click("#gear"); await page.click("#tr"); await page.click("#back");
+  };
   const ui = (page) => page.evaluate(() => `pane ${document.querySelector("#trpane").hidden ? "hidden" : "shown"}: ${document.querySelector("#trstatus").textContent}`);
   const job = (page) => page.evaluate(async () => (await chrome.storage.session.get("job")).job ?? {});
   let page = await open();
@@ -34,6 +38,15 @@ try {
   let last = "";
   j = await waitFor((j) => { const s = `${j.tr?.status} ${j.tr?.done}/${j.tr?.total}`; if (s !== last) { last = s; console.log(((Date.now() - t0) / 1000).toFixed(0) + "s tr", s); } return ["done", "error"].includes(j.tr?.status); });
   console.log("final UI:", await ui(page));
+  if (process.env.SHOTS) {  // screenshots of the main and settings views at the popup's 800x600
+    await page.setViewport({ width: 800, height: 600 });
+    await page.evaluate(() => document.querySelector("#out").scrollTop = 0);
+    await page.screenshot({ path: `${process.env.SHOTS}/main.png` });
+    await page.click("#gear"); await new Promise((r) => setTimeout(r, 300));
+    await page.screenshot({ path: `${process.env.SHOTS}/settings.png` });
+    await page.click("#back");
+    console.log("screenshots in", process.env.SHOTS);
+  }
   console.log("FIRST:", JSON.stringify(j.sentences?.[0]?.text), "->", JSON.stringify(j.tr?.items?.[0]));
   code = j.tr?.status === "done" ? 0 : 1;
 } finally { await browser.close(); }

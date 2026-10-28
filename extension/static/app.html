@@ -1,27 +1,35 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Parakeet ASR</title><link rel="stylesheet" href="app.css"></head>
 <body>
-<header>
-  <label class="grow">Server <input id="server" type="url" spellcheck="false"></label>
-  <label>Language <select id="lang"></select></label>
-  <button id="pin" title="Open in side panel (stays open)">📌</button>
-</header>
-<div class="trrow"><label><input id="tr" type="checkbox"> Translate to</label> <select id="trlang"></select>
-  <small id="trnote">private, on this server: slower, lower quality</small></div>
-<label id="drop" tabindex="0">
-  <input id="file" type="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.webm,.mp4,.mov,.mkv,audio/*,video/*" hidden>
-  <div><strong>Drop audio or video here</strong> or click to choose<br><small>wav · mp3 · flac · ogg · m4a · webm · mp4 · mov · mkv</small></div>
-</label>
-<div id="status"></div>
-<div id="error" hidden></div>
-<audio id="player" controls hidden></audio>
-<video id="vplayer" controls playsinline hidden></video>
-<div id="meta"></div>
-<div id="panes">
-  <div id="out"></div>
-  <section id="trpane" hidden><div id="trstatus"></div><div id="trout"></div></section>
-</div>
-<div class="row"><button id="copy" disabled>Copy</button><button id="dl" disabled>Download .txt</button></div>
-<footer id="versions"></footer>
+<main id="mainview">
+  <div class="bar">
+    <label id="drop" tabindex="0" title="Drop audio or video here, or click to choose">
+      <input id="file" type="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.webm,.mp4,.mov,.mkv,audio/*,video/*" hidden>
+      <span class="big"><strong>Drop audio or video here</strong> or click to choose<br><small>wav · mp3 · flac · ogg · m4a · webm · mp4 · mov · mkv</small></span>
+      <span class="small">⤓ Drop or choose another file</span>
+    </label>
+    <span id="summary" title="Language → translation (change in Settings)"></span>
+    <button id="pin" class="icon" title="Open in side panel (stays open)">📌</button>
+    <button id="gear" class="icon" title="Settings">⚙</button>
+  </div>
+  <div class="bar slim"><div id="status"></div>
+    <button id="copy" disabled>Copy</button><button id="dl" disabled>Download .txt</button></div>
+  <div id="error" hidden></div>
+  <audio id="player" controls hidden></audio>
+  <video id="vplayer" controls playsinline hidden></video>
+  <div id="panes">
+    <div id="out"></div>
+    <section id="trpane" hidden><div id="trstatus"></div><div id="trout"></div></section>
+  </div>
+</main>
+<section id="settings" hidden>
+  <div class="bar"><button id="back">← Back</button><strong>Settings</strong></div>
+  <label class="field">Server <input id="server" type="url" spellcheck="false"></label>
+  <label class="field">Spoken language <select id="lang"></select></label>
+  <div class="trrow"><label><input id="tr" type="checkbox"> Translate to</label> <select id="trlang"></select></div>
+  <small class="note" id="trnote">Translation runs privately on this server: slower, lower quality. Ticking it after a transcript translates that transcript.</small>
+  <h4>Last file</h4><div id="meta">none yet</div>
+  <h4>About</h4><footer id="versions"></footer>
+</section>
 <script src="app.js"></script>
 </body></html>

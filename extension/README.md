@@ -37,7 +37,7 @@ Then in Chrome:
 
 1. Open `chrome://extensions` and turn on **Developer mode** (top right).
 2. Click **Load unpacked** and select `~/parakeet-ext/parakeet-extension`.
-3. Pin "Parakeet ASR" and click the icon. A popup (about 420x600) drops down from the icon. Drop an audio file (wav/mp3/flac/ogg/m4a/webm) or a video (mp4/mov/mkv/webm) on it or click to pick one.
+3. Pin "Parakeet ASR" and click the icon. A popup (800x600, the Chrome maximum) drops down from the icon. Drop an audio file (wav/mp3/flac/ogg/m4a/webm) or a video (mp4/mov/mkv/webm) on it or click to pick one.
 4. Optional: click 📌 to move the UI into Chrome's side panel, which stays open on the right while you browse.
 
 To update: rebuild, re-extract over the same folder, then click the reload button on the extension card.
@@ -51,8 +51,17 @@ To update: rebuild, re-extract over the same folder, then click the reload butto
 
 ## Settings
 
+Open them with the ⚙ gear in the top bar; **← Back** (or Esc) returns to the main view. The main view has only the
+drop zone (shrinks to one line once a file is loaded), a chip showing the language and translation target, a compact status
+line with Copy/Download, the player, and the transcript and translation panes, which fill the rest and scroll independently
+(side by side in the popup and in a wide side panel, stacked in a narrow one). Everything below is in Settings, along with
+details of the last file and the version info (Extension, Service, Model, NeMo, torch, Pod, GPU, Mode).
+
 - **Server**: default `http://192.168.8.226:30800` (NodePort). `https://slim` (Traefik) also works. Any other URL triggers a one-time Chrome permission prompt (`optional_host_permissions`).
-- **Language**: `auto` or a language code. Both are saved in `chrome.storage.local`.
+- **Spoken language**: `auto` or a language code.
+- **Translate to** + target language.
+
+All are saved in `chrome.storage.local`.
 
 ## Self-signed cert (https://slim)
 

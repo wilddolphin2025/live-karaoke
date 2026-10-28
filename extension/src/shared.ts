@@ -84,3 +84,8 @@ export function needsTranslation(job: JobState, checked: boolean, target: string
   if (!job.tr) return true;
   return job.tr.target !== target || job.tr.status === "error" && !!job.sentences?.length;
 }
+
+/** Compact settings chip for the main view, e.g. "auto → en" or "es". */
+export function summaryText(language: string, translate: boolean, target: string): string {
+  return translate ? `${language} → ${target}` : language;
+}
