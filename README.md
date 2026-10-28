@@ -133,7 +133,8 @@ Env (separator): `SEPARATOR_MODEL` (htdemucs_ft), `SEPARATOR_CPU_MODEL` (htdemuc
 `TORCH_HOME` (/models/torch). `GET /v1/info` has a `separation` block.
 
 ## Deploy
-It also applies `separator.yaml` (0 replicas, scaled on demand; a running separator is restarted on the new code). `deploy/deploy.sh` (needs sudo for the image import). It applies gpu-sharing, rbac, translator (0 replicas) and ASR,
+`deploy/deploy.sh` (needs sudo for the image import). It applies gpu-sharing, rbac, translator (0 replicas), separator (0 replicas, scaled on demand;
+a running one is restarted on the new code) and ASR,
 and resets to `asr` mode (0.6.0: also deletes the old `riva-translate` Deployment/Service). The translator's
 initContainer downloads the 2.5 GB GGUF into
 `~/.cache/huggingface/gguf/` on first start if missing.
