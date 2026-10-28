@@ -1,4 +1,4 @@
-import { DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, getAudio, getState, putAudio } from "./shared";
+import { DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, getAudio, getState, putAudio } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
@@ -8,6 +8,7 @@ const server = $<HTMLInputElement>("server"), lang = $<HTMLSelectElement>("lang"
 const trBox = $<HTMLInputElement>("tr"), trLang = $<HTMLSelectElement>("trlang");
 const drop = $<HTMLLabelElement>("drop"), fileInput = $<HTMLInputElement>("file");
 const statusEl = $("status"), errBox = $("error"), meta = $("meta"), out = $("out"), versions = $("versions");
+const trPane = $("trpane"), trOut = $("trout"), trStatus = $("trstatus");
 const audioEl = $<HTMLAudioElement>("player"), videoEl = $<HTMLVideoElement>("vplayer");
 // Whichever element is showing the current file; highlighting follows its clock.
 let player: HTMLMediaElement = audioEl;
@@ -16,9 +17,10 @@ const copyBtn = $<HTMLButtonElement>("copy"), dlBtn = $<HTMLButtonElement>("dl")
 const isPanel = new URLSearchParams(location.search).has("panel");
 if (isPanel) { document.body.classList.add("panel"); pinBtn.hidden = true; }
 
-let plainText = "", baseName = "transcript", timer: ReturnType<typeof setInterval> | undefined;
+let lastJob: JobState = { phase: "idle" }, baseName = "transcript", timer: ReturnType<typeof setInterval> | undefined;
 let spans: { el: HTMLElement; start: number; end: number }[] = [];
-let audioUrl: string | undefined, audioKey = "", renderedKey = "";
+let trSpans: { el: HTMLElement; start: number; end: number }[] = [];
+let audioUrl: string | undefined, audioKey = "", renderedKey = "", trKey = "";
 
 const fmt = (s: number) => { const m = Math.floor(s / 60); return `${String(m).padStart(2, "0")}:${(s - m * 60).toFixed(2).padStart(5, "0")}`; };
 const baseUrl = () => (server.value.trim() || DEFAULT_SERVER).replace(/\/+$/, "");
@@ -63,10 +65,11 @@ async function start(file: File) {
   catch { showError(`Invalid server URL: ${base}`); return; }
   await putAudio(file, file.name);  // the service worker reads the audio from IndexedDB
   const translateTo = trBox.checked ? trLang.value : undefined;
-  const url = `${base}/v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true` +
-    (translateTo ? `&translate=${encodeURIComponent(translateTo)}` : "");
+  // Plain Deepgram request (no translate=): the transcript comes back as fast as ASR allows;
+  // the service worker then translates the timed sentences progressively via /v1/translate.
+  const url = `${base}/v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true&paragraphs=true`;
   await chrome.storage.session.set({ job: { phase: "running", fileName: file.name, startedAt: Date.now(), translateTo } satisfies JobState });
-  await chrome.runtime.sendMessage({ type: "transcribe", url, mime, translateTo });
+  await chrome.runtime.sendMessage({ type: "transcribe", url, mime, base, language: lang.value, translateTo });
 }
 
 function showError(msg: string) { errBox.textContent = msg; errBox.hidden = false; }
@@ -88,20 +91,23 @@ async function loadPlayer(name: string) {
 
 async function render(job: JobState) {
   clearInterval(timer);
+  lastJob = job;
   const running = job.phase === "running";
   drop.classList.toggle("busy", running);
   errBox.hidden = job.phase !== "error";
   if (job.phase === "error") errBox.textContent = job.error ?? "Unknown error";
   if (job.fileName) { baseName = job.fileName.replace(/\.[^.]+$/, "") || "transcript"; await loadPlayer(job.fileName); }
   if (running) {
-    const tick = () => { statusEl.innerHTML = `<span class="spin"></span>${job.note ?? `Transcribing${job.translateTo ? ` + translating to ${job.translateTo}` : ""} ${job.fileName ?? ""}…`} ${((Date.now() - job.startedAt!) / 1000).toFixed(1)}s`; };
+    const tick = () => { statusEl.innerHTML = `<span class="spin"></span>${job.note ?? `Transcribing ${job.fileName ?? ""}…`} ${((Date.now() - job.startedAt!) / 1000).toFixed(1)}s`; };
     tick(); timer = setInterval(tick, 100);
     out.textContent = ""; meta.textContent = ""; copyBtn.disabled = dlBtn.disabled = true; renderedKey = "";
+    renderTranslation(job);
     return;
   }
   const took = job.startedAt && job.finishedAt ? ` in ${((job.finishedAt - job.startedAt) / 1000).toFixed(1)}s` : "";
   statusEl.textContent = job.phase === "done" ? `Done${took}: ${job.fileName}` : job.phase === "error" ? `Failed${took}` : "";
-  if (job.phase !== "done") return;
+  if (job.phase !== "done") { renderTranslation(job); return; }
+  renderTranslation(job);  // progressive: runs on every state update
   const key = `${job.requestId}`;
   if (key === renderedKey) return;
   renderedKey = key;
@@ -138,27 +144,78 @@ function renderTranscript(job: JobState) {
       spans.push({ el: d, start: u.start, end: u.end });
     }
   } else out.textContent = job.transcript || "(empty transcript)";
-  // Translations: under each utterance, or one block when there are no utterances.
-  const trOf = (u?: { translations?: { translation: string }[] }) => u?.translations?.[0]?.translation;
-  const addTr = (after: Element, text?: string) => {
-    if (!text) return; const d = document.createElement("div"); d.className = "tr"; d.textContent = text; after.after(d);
-  };
-  const perUtt = utts.some((u) => trOf(u));
-  if (perUtt) out.querySelectorAll<HTMLElement>(words.length ? ".p" : ".u").forEach((el, i) =>
-    addTr(el, trOf(utts[words.length ? Number(el.dataset.u) : i])));
-  const full = job.translations?.[0]?.translation;
-  if (full && !perUtt) { const d = document.createElement("div"); d.id = "trall"; d.className = "tr";
-    d.textContent = `${job.translations![0].language}: ${full}`; out.append(d); }
-  plainText = utts.length
-    ? utts.map((u) => `[${fmt(u.start)} - ${fmt(u.end)}] ${u.transcript}` + (trOf(u) ? `\n    ${trOf(u)}` : "")).join("\n") + "\n"
-    : (job.transcript ?? "") + "\n" + (full ? `\n${full}\n` : "");
+}
+
+function plainText(job: JobState): string {
+  const utts = job.utterances ?? [];
+  let t = utts.length ? utts.map((u) => `[${fmt(u.start)} - ${fmt(u.end)}] ${u.transcript}`).join("\n") + "\n" : (job.transcript ?? "") + "\n";
+  const tr = job.tr, sents = job.sentences ?? [];
+  if (tr && tr.done) t += `\n--- Translation (${tr.target}) ---\n` +
+    sents.map((s, i) => tr.items[i] == null ? "" : `[${fmt(s.start)} - ${fmt(s.end)}] ${tr.items[i]}`).filter(Boolean).join("\n") + "\n";
+  return t;
+}
+
+const trName = (code: string) => TRANSLATE_LANGS.find(([c]) => c === code)?.[1] ?? code;
+function trStatusText(tr: TranslationState): string {
+  const secs = (((tr.finishedAt ?? Date.now()) - tr.startedAt) / 1000).toFixed(0);
+  switch (tr.status) {
+    case "warming": return `<span class="spin"></span>Translator warming up (~1 min)${tr.note ? `, ${tr.note}` : ""}… ${tr.done}/${tr.total} sentences`;
+    case "translating": return `<span class="spin"></span>Translating to ${trName(tr.target)}: ${tr.done}/${tr.total} sentences`;
+    case "done": return `Translated ${tr.total}/${tr.total} sentences to ${trName(tr.target)} in ${secs}s`;
+    default: return `Translation stopped at ${tr.done}/${tr.total}: ${tr.error ?? "error"}`;
+  }
+}
+
+// Second pane: one block per timed source sentence, filled as translations arrive.
+function renderTranslation(job: JobState) {
+  const tr = job.tr, sents = job.sentences ?? [];
+  const wanted = job.phase === "running" ? !!job.translateTo : !!tr;
+  trPane.hidden = !wanted;
+  if (!wanted) { trKey = ""; trSpans = []; return; }
+  if (job.phase === "running" || !tr) {
+    trOut.textContent = ""; trSpans = []; trKey = "";
+    trStatus.textContent = job.phase === "running" ? `Translation to ${trName(job.translateTo!)} starts after the transcript.` : "";
+    return;
+  }
+  trStatus.innerHTML = trStatusText(tr);
+  trStatus.classList.toggle("err", tr.status === "error");
+  const key = `${job.requestId}:${tr.target}`;
+  if (key !== trKey) {
+    trKey = key; trOut.textContent = ""; trSpans = []; trCur = -1;
+    sents.forEach((s) => {
+      const d = document.createElement("div"); d.className = "s pending"; d.title = s.text;
+      const t = document.createElement("span"); t.className = "t"; t.textContent = fmt(s.start);
+      d.append(t, document.createElement("span")); d.onclick = () => seek(s.start);
+      trOut.append(d); trSpans.push({ el: d, start: s.start, end: s.end });
+    });
+  }
+  tr.items.forEach((text, i) => {
+    const el = trSpans[i]?.el; if (!el || text == null || !el.classList.contains("pending")) return;
+    el.classList.remove("pending"); (el.lastChild as HTMLElement).textContent = text;
+  });
+  if (tr.status !== "done" && tr.status !== "error") trSpans[tr.done]?.el.classList.add("next");
+  trSpans.forEach((s, i) => { if (i !== tr.done) s.el.classList.remove("next"); });
 }
 
 function seek(t: number) { player.currentTime = t; void player.play(); }
 
-let cur = -1;
+let cur = -1, trCur = -1;
+function lastStartingBefore(arr: { start: number }[], t: number): number {
+  let i = -1, lo = 0, hi = arr.length - 1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m].start <= t) { i = m; lo = m + 1; } else hi = m - 1; }
+  return i;
+}
+function highlightTranslation(t: number) {
+  let i = lastStartingBefore(trSpans, t);
+  if (i >= 0 && t > trSpans[i].end + 1.0) i = -1;  // between sentences
+  if (i === trCur) return;
+  if (trCur >= 0) trSpans[trCur]?.el.classList.remove("cur");
+  trCur = i;
+  if (i >= 0) { trSpans[i].el.classList.add("cur"); trSpans[i].el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+}
 function highlight() {
   const t = player.currentTime;
+  highlightTranslation(t);
   let i = -1;
   // Binary search for the last span starting at or before t.
   let lo = 0, hi = spans.length - 1;
@@ -175,9 +232,9 @@ for (const el of [audioEl, videoEl]) {
   el.addEventListener("play", () => { const loop = () => { highlight(); if (!el.paused) requestAnimationFrame(loop); }; requestAnimationFrame(loop); });
 }
 
-copyBtn.addEventListener("click", async () => { await navigator.clipboard.writeText(plainText); copyBtn.textContent = "Copied!"; setTimeout(() => (copyBtn.textContent = "Copy"), 1200); });
+copyBtn.addEventListener("click", async () => { await navigator.clipboard.writeText(plainText(lastJob)); copyBtn.textContent = "Copied!"; setTimeout(() => (copyBtn.textContent = "Copy"), 1200); });
 dlBtn.addEventListener("click", () => {
-  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([plainText], { type: "text/plain" }));
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([plainText(lastJob)], { type: "text/plain" }));
   a.download = `${baseName}.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
 

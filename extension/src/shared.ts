@@ -12,6 +12,19 @@ export const TRANSLATE_LANGS: [string, string][] = [["en","English"],["ar","Arab
 export interface Translation { language: string; translation: string }
 export interface Word { word: string; start: number; end: number; punctuated_word?: string }
 export interface Utterance { start: number; end: number; transcript: string; translations?: Translation[] }
+export interface Sentence { text: string; start: number; end: number }
+export interface TranslationState {
+  target: string;
+  status: "warming" | "translating" | "done" | "error";
+  done: number;
+  total: number;
+  items: (string | null)[];  // one per JobState.sentences entry, null until translated
+  startedAt: number;
+  finishedAt?: number;
+  note?: string;
+  model?: string;
+  error?: string;
+}
 export interface JobState {
   phase: "idle" | "running" | "done" | "error";
   fileName?: string;
@@ -23,6 +36,8 @@ export interface JobState {
   note?: string;          // e.g. translator warming up, retry n
   words?: Word[];
   utterances?: Utterance[];
+  sentences?: Sentence[];   // timed source sentences (Deepgram paragraphs)
+  tr?: TranslationState;    // progressive translation of `sentences`
   model?: string;
   duration?: number;
   servedBy?: string;

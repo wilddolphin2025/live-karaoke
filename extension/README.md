@@ -26,8 +26,8 @@ Outputs (gitignored):
 ## Install on another machine (e.g. your Mac)
 
 ```bash
-scp slim:~/parakeet/extension/release/parakeet-extension-0.3.0.tar.gz ~/
-mkdir -p ~/parakeet-ext && tar -xzf ~/parakeet-extension-0.3.0.tar.gz -C ~/parakeet-ext
+scp slim:~/parakeet/extension/release/parakeet-extension-0.5.0.tar.gz ~/
+mkdir -p ~/parakeet-ext && tar -xzf ~/parakeet-extension-0.5.0.tar.gz -C ~/parakeet-ext
 # -> ~/parakeet-ext/parakeet-extension/manifest.json
 ```
 
@@ -61,3 +61,12 @@ Chrome rejects the self-signed certificate until you trust it. Open `https://sli
 ## CORS
 
 None needed. The request comes from the extension page, and `host_permissions` exempt it from CORS. The server is unchanged.
+
+## Translation (0.5.0)
+
+Tick **Translate to** and pick a language. The transcript appears as soon as ASR finishes (plain
+`/v1/listen?paragraphs=true`); a second **translation pane** (below the transcript; side by side in a wide side panel)
+then fills sentence by sentence via `POST /v1/translate`. Status line: "Translator warming up (~1 min)" while the
+cluster switches to translate mode (503 + Retry-After is retried automatically), then "Translating n/m sentences".
+During playback the word highlight continues in the transcript and the translated sentence covering the current time
+is highlighted too; click a translated sentence to seek. Copy/Download include the translation.

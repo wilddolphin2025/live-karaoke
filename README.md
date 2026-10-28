@@ -36,6 +36,22 @@ field names as Deepgram. Source language comes from `language` (or detection).
 - `503` with `Retry-After` and Deepgram-style body `{"err_code": "TRANSLATOR_WARMING_UP", "err_msg": ..., "request_id": ...}`
   while the cluster switches modes (`TRANSLATOR_UNAVAILABLE` if it fails). Clients should retry.
 - Unknown target → `400 {"err_code": "INVALID_QUERY_PARAMETER", ...}`.
+- `paragraphs=true` — Deepgram's `alternatives[].paragraphs = {transcript, paragraphs: [{sentences: [{text, start, end}], start, end, num_words}]}`.
+  Sentences are split on terminal punctuation (or a >1.5 s pause / 40 words) and timed from word timestamps.
+
+### `POST /v1/translate` (extension, not part of Deepgram)
+For progressive clients (the Chrome extension): call plain `/v1/listen?paragraphs=true` first (no `translate=`, so the
+transcript is not delayed), then send the timed sentences here one or a few at a time; start/end are echoed back so the
+client can sync the translation with playback.
+
+```
+POST /v1/translate  {"target": "en", "source": "ru" | "auto" | null,
+                     "sentences": [{"text": "Привет.", "start": 0.5, "end": 1.4}]}      (max 64 sentences)
+200 {"request_id": "...", "model": "...", "language": "en", "source": "ru",
+     "sentences": [{"text": "Привет.", "start": 0.5, "end": 1.4, "translation": "Hello."}]}
+```
+An empty `sentences` list only warms up (triggers the mode switch). Same 503 + `Retry-After` / `TRANSLATOR_WARMING_UP`
+and 400 rules as `/v1/listen?translate=`. `/v1/listen?translate=` keeps working unchanged for Deepgram clients.
 - `GET /v1/info` has a `translation` block: `model`, `languages`, and `mode` (`asr` | `warming` | `translate` | `unmanaged`).
 - `metadata.models` additionally lists the translator model when translation ran.
 

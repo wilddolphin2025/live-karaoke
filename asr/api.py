@@ -13,13 +13,16 @@ from fastapi.responses import JSONResponse
 
 from asr.audio import UndecodableAudio, decode
 from asr.engine import SAMPLE_RATE, ParakeetEngine
-from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse,
-                         Metadata, Results, Translation, Utterance)
+from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse, Metadata,
+                         Paragraph, Paragraphs, Results, Sentence, TranslatedSentence,
+                         TranslateRequest, TranslateResponse, Translation, Utterance)
+from asr.sentences import sentences as split_sentences
 from asr.translate import (LANGUAGES, ModeController, TranslatorClient,
-                           TranslatorUnavailable, UnsupportedLanguage, parse_targets)
+                           TranslatorUnavailable, UnsupportedLanguage, normalize_lang,
+                           parse_targets)
 from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 HOSTNAME = os.environ.get("HOSTNAME", "unknown")
 MAX_BYTES = 200 * 1024 * 1024
@@ -156,6 +159,45 @@ async def _translate_segments(translator, texts: list[str], targets: list[str], 
     return out
 
 
+def _paragraphs(segments, transcript: str) -> Paragraphs:
+    paras = []
+    for s in segments:
+        sents = split_sentences([s])
+        if sents:
+            paras.append(Paragraph(sentences=[Sentence(text=x.text, start=x.start, end=x.end) for x in sents],
+                                   start=sents[0].start, end=sents[-1].end,
+                                   num_words=sum(len(x.text.split()) for x in sents)))
+    return Paragraphs(transcript=transcript, paragraphs=paras)
+
+
+@app.post("/v1/translate", response_model=TranslateResponse)
+async def translate_sentences(request: Request, body: TranslateRequest):
+    """Extension (not Deepgram): translate timed sentences, echoing start/end.
+
+    Meant for progressive clients: call /v1/listen?paragraphs=true first, then send
+    sentences here one or a few at a time. An empty list only warms the translator
+    (starts the mode switch). 503 + Retry-After while warming, like /v1/listen."""
+    try:
+        target = parse_targets(body.target)
+        if len(target) != 1:
+            raise UnsupportedLanguage(body.target)
+        target = target[0]
+        source = None if body.source in (None, "", "auto") else normalize_lang(body.source)
+    except UnsupportedLanguage as e:
+        raise ApiError(400, "Bad Request", f"Unsupported language: {e}. "
+                       f"Supported: {', '.join(sorted(LANGUAGES))}") from None
+    await _ready_translator(request.app)
+    out = []
+    try:
+        for s in body.sentences:
+            out.append(TranslatedSentence(**s.model_dump(),
+                                          translation=await request.app.state.translator.translate(s.text, target, source)))
+    except TranslatorUnavailable as e:
+        raise ApiError(503, "TRANSLATOR_UNAVAILABLE", str(e), {"Retry-After": str(e.retry_after)}) from None
+    return TranslateResponse(request_id=request.state.request_id, model=request.app.state.translator.model,
+                             language=target, source=source, sentences=out)
+
+
 @app.post("/v1/listen", response_model=ListenResponse, response_model_exclude_none=True)
 async def listen(
     request: Request,
@@ -164,6 +206,7 @@ async def listen(
     language: str = Query("auto", pattern="^(auto|bg|cs|da|de|el|en|es|et|fi|fr|hr|hu|it|lt|lv|mt|nl|pl|pt|ro|ru|sk|sl|sv|uk)$",
                           description="ISO 639-1 code of the speech, or auto"),
     translate: str | None = Query(None, description="Target language code(s), comma-separated, e.g. en or en,de (Deepgram name)"),
+    paragraphs: bool = Query(False, description="Deepgram paragraphs: timed sentences per paragraph"),
 ):
     targets: list[str] = []
     if translate:
@@ -214,6 +257,7 @@ async def listen(
                 words=[{"word": w.word, "start": w.start, "end": w.end,
                         "confidence": w.confidence, "punctuated_word": w.word}
                        for s in segments for w in s.words],
+                paragraphs=_paragraphs(segments, transcript) if paragraphs else None,
                 translations=[Translation(language=t, translation=" ".join(x.strip() for x in v if x.strip()))
                               for t, v in seg_tr.items()] if targets else None,
             )])],
