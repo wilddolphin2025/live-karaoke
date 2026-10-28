@@ -1,7 +1,7 @@
 // Runs uploads so they survive the popup closing (it closes whenever it loses focus).
 // Flow: POST /v1/listen?paragraphs=true (plain Deepgram, fast) -> show transcript -> then
 // POST /v1/translate one timed sentence at a time, publishing each translation as it lands.
-import { getAudio, setState, JobState, Sentence, TranslationState } from "./shared";
+import { BUILD, getAudio, setState, JobState, Sentence, TranslationState } from "./shared";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false }).catch(() => {});
@@ -10,7 +10,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === "transcribe") {
     void run(msg.url as string, msg.mime as string, msg.base as string, msg.language as string, msg.translateTo as string | undefined);
-    reply({ ok: true });
+    reply({ ok: true, build: BUILD });
   }
   return false;
 });
@@ -69,7 +69,13 @@ async function run(url: string, mime: string, base: string, language: string, tr
       model: Array.isArray(models) ? models.join(", ") : models, duration: data?.metadata?.duration,
       requestId: data?.metadata?.request_id };
     await setState(done);  // transcript shows now; translation fills in below
-    if (translateTo && sentences.length) await translateAll(done, base, language, translateTo, gen);
+    if (translateTo) {
+      if (sentences.length) await translateAll(done, base, language, translateTo, gen);
+      else await setState({ ...done, tr: { target: translateTo, status: "error", done: 0, total: 0, items: [], startedAt: Date.now(),
+        finishedAt: Date.now(), error: "no sentences in the transcript to translate" } });
+    }
+  } catch (e) {
+    await setState({ ...job, phase: "error", finishedAt: Date.now(), error: `Extension error: ${(e as Error).message}` });
   } finally { if (gen === generation) clearInterval(keepAlive); }
 }
 

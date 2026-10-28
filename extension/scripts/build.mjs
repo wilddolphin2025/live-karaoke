@@ -1,10 +1,12 @@
 import { build } from "esbuild";
-import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
 rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist/icons", { recursive: true });
-await build({ entryPoints: ["src/background.ts", "src/app.ts"], bundle: true, outdir: "dist", format: "iife", target: "chrome110", minify: false, logLevel: "info" });
+const { version } = JSON.parse(readFileSync("static/manifest.json", "utf8"));
+// Baked into both bundles: the page checks the service worker runs the same build.
+await build({ define: { __BUILD__: JSON.stringify(version) }, entryPoints: ["src/background.ts", "src/app.ts"], bundle: true, outdir: "dist", format: "iife", target: "chrome110", minify: false, logLevel: "info" });
 cpSync("static", "dist", { recursive: true });
 
 // Generated icon: green rounded square with a white waveform.

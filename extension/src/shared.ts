@@ -1,3 +1,6 @@
+declare const __BUILD__: string;
+/** Extension build (manifest version), compiled into both the page and the service worker. */
+export const BUILD: string = typeof __BUILD__ === "string" ? __BUILD__ : "dev";
 export const DEFAULT_SERVER = "http://192.168.8.226:30800";
 export const LANGS = ["auto","bg","cs","da","de","el","en","es","et","fi","fr","hr","hu","it","lt","lv","mt","nl","pl","pt","ro","ru","sk","sl","sv","uk"];
 

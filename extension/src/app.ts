@@ -1,4 +1,4 @@
-import { DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, getAudio, getState, putAudio } from "./shared";
+import { BUILD, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, getAudio, getState, putAudio } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
@@ -69,9 +69,15 @@ async function start(file: File) {
   // the service worker then translates the timed sentences progressively via /v1/translate.
   const url = `${base}/v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true&paragraphs=true`;
   await chrome.storage.session.set({ job: { phase: "running", fileName: file.name, startedAt: Date.now(), translateTo } satisfies JobState });
-  await chrome.runtime.sendMessage({ type: "transcribe", url, mime, base, language: lang.value, translateTo });
+  const reply = await chrome.runtime.sendMessage({ type: "transcribe", url, mime, base, language: lang.value, translateTo }).catch((e) => ({ err: String(e) }));
+  // A service worker left over from an older build still answers, but ignores translateTo.
+  if (reply?.build !== BUILD) staleWorker = `Background worker is ${reply?.build ? `build ${reply.build}` : "an older build"}, this page is ${BUILD}` +
+    `: open chrome://extensions and press Reload on Parakeet ASR${translateTo ? " (translation will not start until then)" : ""}.`;
+  else staleWorker = "";
+  if (staleWorker) showError(staleWorker);
 }
 
+let staleWorker = "";
 function showError(msg: string) { errBox.textContent = msg; errBox.hidden = false; }
 
 const isVideo = (blob: Blob, name: string) =>
@@ -169,12 +175,17 @@ function trStatusText(tr: TranslationState): string {
 // Second pane: one block per timed source sentence, filled as translations arrive.
 function renderTranslation(job: JobState) {
   const tr = job.tr, sents = job.sentences ?? [];
-  const wanted = job.phase === "running" ? !!job.translateTo : !!tr;
+  const wanted = job.phase === "running" || !tr ? !!job.translateTo : true;
   trPane.hidden = !wanted;
   if (!wanted) { trKey = ""; trSpans = []; return; }
   if (job.phase === "running" || !tr) {
     trOut.textContent = ""; trSpans = []; trKey = "";
-    trStatus.textContent = job.phase === "running" ? `Translation to ${trName(job.translateTo!)} starts after the transcript.` : "";
+    trStatus.textContent = job.phase === "running" ? `Translation to ${trName(job.translateTo!)} starts after the transcript.`
+      : job.phase === "done" && Date.now() - (job.finishedAt ?? 0) < 4000 ? "Starting translation…"
+      : job.phase === "done" ? `Translation did not start. ${staleWorker || "Reload the extension in chrome://extensions and try again."}`
+      : "Translation skipped: transcription failed.";
+    trStatus.classList.toggle("err", job.phase !== "running" && !trStatus.textContent!.startsWith("Starting"));
+    if (job.phase === "done") setTimeout(() => { if (lastJob === job) renderTranslation(job); }, 4500);  // watchdog
     return;
   }
   trStatus.innerHTML = trStatusText(tr);
