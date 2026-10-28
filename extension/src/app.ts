@@ -1,4 +1,4 @@
-import { BUILD, needsTranslation, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
+import { BUILD, needsTranslation, needsSeparation, sepStatusText, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
@@ -11,7 +11,7 @@ $("gear").addEventListener("click", () => showSettings(true));
 $("back").addEventListener("click", () => showSettings(false));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !settingsView.hidden) { e.preventDefault(); showSettings(false); } });
 function updateSummary() {
-  summary.textContent = summaryText(lang.value, trBox.checked, trLang.value);
+  summary.textContent = summaryText(lang.value, trBox.checked, trLang.value, sepBox?.checked ?? false);
 }
 const server = $<HTMLInputElement>("server"), lang = $<HTMLSelectElement>("lang");
 const trBox = $<HTMLInputElement>("tr"), trLang = $<HTMLSelectElement>("trlang");
@@ -33,13 +33,16 @@ let trSpans: { el: HTMLElement; start: number; end: number }[] = [];
 let audioUrl: string | undefined, audioKey = "", renderedKey = "", trKey = "";
 
 const fmt = (s: number) => { const m = Math.floor(s / 60); return `${String(m).padStart(2, "0")}:${(s - m * 60).toFixed(2).padStart(5, "0")}`; };
+const sepBox = $<HTMLInputElement>("sep"), sepBar = $<HTMLDivElement>("sepbar"), sepStatus = $<HTMLDivElement>("sepstatus");
+const sepMode = $<HTMLButtonElement>("sepmode"), sepDl = $<HTMLAnchorElement>("sepdl");
+let mode: "orig" | "inst" = "orig", modeJob = "";  // which track the player plays (instrumental only after vocal removal)
 const baseUrl = () => (server.value.trim() || DEFAULT_SERVER).replace(/\/+$/, "");
 
 for (const l of LANGS) lang.add(new Option(l, l));
 for (const [code, name] of TRANSLATE_LANGS) trLang.add(new Option(name, code));
-const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto", translate: false, translateTo: "en" }).then((s) => {
+const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto", translate: false, translateTo: "en", separate: false }).then((s) => {
   server.value = s.server as string; lang.value = s.language as string;
-  trBox.checked = s.translate as boolean; trLang.value = s.translateTo as string; trLang.disabled = !trBox.checked; updateSummary();
+  trBox.checked = s.translate as boolean; trLang.value = s.translateTo as string; trLang.disabled = !trBox.checked; sepBox.checked = s.separate === true; updateSummary();
 });
 trBox.addEventListener("change", () => { trLang.disabled = !trBox.checked; chrome.storage.local.set({ translate: trBox.checked }); void maybeTranslate(); });
 trLang.addEventListener("change", () => { chrome.storage.local.set({ translateTo: trLang.value }); void maybeTranslate(); });
@@ -57,6 +60,40 @@ async function maybeTranslate() {
 }
 server.addEventListener("change", () => { chrome.storage.local.set({ server: baseUrl() }); void loadVersions(); });
 lang.addEventListener("change", () => chrome.storage.local.set({ language: lang.value }));
+// "Remove vocals": strictly opt-in. Ticking it after a transcript removes the vocals of that file.
+sepBox.addEventListener("change", () => { chrome.storage.local.set({ separate: sepBox.checked }); updateSummary(); renderSep(lastJob); void maybeSeparate(); });
+let lastSepAsk = "";
+async function maybeSeparate() {
+  if (!needsSeparation(lastJob, sepBox.checked)) return;
+  const ask = `${lastJob.requestId}`;
+  if (ask === lastSepAsk) return;
+  lastSepAsk = ask;
+  await chrome.runtime.sendMessage({ type: "separate", base: baseUrl(), language: lang.value }).catch(() => null);
+}
+function renderSep(job: JobState) {
+  const s = job.sep;
+  const pending = !s && sepBox.checked && (job.phase === "running" || (job.phase === "done" && job.separate === true));
+  sepBar.hidden = !s && !pending;
+  if (!s) { sepMode.hidden = sepDl.hidden = true; if (pending) sepStatus.textContent = "Vocals will be removed after the transcript" + (job.translateTo ? " and translation." : "."); return; }
+  const busy = s.status !== "done" && s.status !== "error";
+  sepStatus.innerHTML = (busy ? '<span class="spin"></span>' : "") + escapeHtml(sepStatusText(s));
+  sepStatus.title = s.error ?? "";
+  const ready = s.status === "done" && !!s.downloadUrl;
+  sepDl.hidden = !ready;
+  if (ready) { sepDl.href = s.downloadUrl!; sepDl.title = `Download the ${s.isVideo ? "video without the lead voice" : "instrumental"}`; }
+  sepMode.hidden = !ready || !player || player.hidden;
+  sepMode.textContent = mode === "inst" ? "🎤 Original" : "🎶 Instrumental";
+}
+const escapeHtml = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+sepMode.addEventListener("click", () => {
+  const s = lastJob.sep;
+  if (!s?.downloadUrl || !player) return;
+  const t = player.currentTime, playing = !player.paused;
+  mode = mode === "inst" ? "orig" : "inst";
+  player.src = mode === "inst" ? s.downloadUrl : audioUrl!;
+  player.addEventListener("loadedmetadata", () => { player!.currentTime = t; if (playing) void player!.play(); }, { once: true });
+  renderedKey = ""; renderTranscript(lastJob); renderSep(lastJob);
+});
 
 // sidePanel.open needs a user gesture, so resolve the window id up front, not inside the click.
 let winId: number | undefined;
@@ -87,11 +124,12 @@ async function start(file: File) {
   catch { showError(`Invalid server URL: ${base}`); return; }
   await putAudio(file, file.name);  // the service worker reads the audio from IndexedDB
   const translateTo = trBox.checked ? trLang.value : undefined;
+  const separate = sepBox.checked;  // vocal removal only when the user opted in
   // Plain Deepgram request (no translate=): the transcript comes back as fast as ASR allows;
   // the service worker then translates the timed sentences progressively via /v1/translate.
   const url = `${base}/v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true&paragraphs=true`;
-  await chrome.storage.session.set({ job: { phase: "running", fileName: file.name, startedAt: Date.now(), translateTo } satisfies JobState });
-  const reply = await chrome.runtime.sendMessage({ type: "transcribe", url, mime, base, language: lang.value, translateTo }).catch((e) => ({ err: String(e) }));
+  await chrome.storage.session.set({ job: { phase: "running", fileName: file.name, startedAt: Date.now(), translateTo, ...(separate ? { separate } : {}) } satisfies JobState });
+  const reply = await chrome.runtime.sendMessage({ type: "transcribe", url, mime, base, language: lang.value, translateTo, separate }).catch((e) => ({ err: String(e) }));
   // A service worker left over from an older build still answers, but ignores translateTo.
   if (reply?.build !== BUILD) staleWorker = `Background worker is ${reply?.build ? `build ${reply.build}` : "an older build"}, this page is ${BUILD}` +
     `: open chrome://extensions and press Reload on Parakeet ASR${translateTo ? " (translation will not start until then)" : ""}.`;
@@ -104,7 +142,7 @@ async function start(file: File) {
 clearBtn.addEventListener("click", async () => {
   const reply = await chrome.runtime.sendMessage({ type: "clear" }).catch(() => null);
   if (!reply?.ok) { await clearAudio().catch(() => {}); await setState({ phase: "idle" }); }
-  lastAsk = ""; staleWorker = "";
+  lastAsk = ""; lastSepAsk = ""; staleWorker = "";
   await render({ phase: "idle" });
 });
 
@@ -142,13 +180,19 @@ async function render(job: JobState) {
   clearBtn.hidden = idle;
   if (idle) {
     resetPlayers(); out.textContent = ""; trOut.textContent = ""; statusEl.textContent = ""; meta.textContent = "none yet";
-    spans = []; trSpans = []; renderedKey = ""; trKey = ""; copyBtn.disabled = dlBtn.disabled = true;
+    spans = []; trSpans = []; renderedKey = ""; trKey = ""; renderSep(job); copyBtn.disabled = dlBtn.disabled = true;
   }
   drop.classList.toggle("busy", running);
   drop.classList.toggle("loaded", job.phase !== "idle");
+  const jobKey = `${job.fileName ?? ""}:${job.startedAt ?? ""}`;
+  if (jobKey !== modeJob || job.sep?.status !== "done") {  // new file or no instrumental: back to the original
+    if (mode === "inst" && player && audioUrl) player.src = audioUrl;
+    mode = "orig"; modeJob = jobKey;
+  }
   errBox.hidden = job.phase !== "error";
   if (job.phase === "error") errBox.textContent = job.error ?? "Unknown error";
   if (job.fileName) { baseName = job.fileName.replace(/\.[^.]+$/, "") || "transcript"; await loadPlayer(job.fileName); if (lastJob !== job) return; }  // a newer state arrived while loading
+  renderSep(job);
   if (running) {
     const tick = () => { statusEl.innerHTML = `<span class="spin"></span>${job.note ?? `Transcribing ${job.fileName ?? ""}…`} ${((Date.now() - job.startedAt!) / 1000).toFixed(1)}s`; };
     tick(); timer = setInterval(tick, 100);
@@ -160,8 +204,9 @@ async function render(job: JobState) {
   statusEl.textContent = job.phase === "done" ? `Done${took}: ${job.fileName}` : job.phase === "error" ? `Failed${took}` : "";
   if (job.phase !== "done") { renderTranslation(job); return; }
   void maybeTranslate();
+  void maybeSeparate();
   renderTranslation(job);  // progressive: runs on every state update
-  const key = `${job.requestId}`;
+  const key = `${job.requestId}:${mode}`;
   if (key === renderedKey) return;
   renderedKey = key;
   meta.textContent = [`Model: ${job.model ?? "unknown"}`, job.duration ? `audio ${job.duration.toFixed(1)}s` : "",
@@ -173,7 +218,9 @@ async function render(job: JobState) {
 
 function renderTranscript(job: JobState) {
   out.textContent = ""; spans = [];
-  const words: Word[] = job.words ?? [], utts = job.utterances ?? [];
+  // While the instrumental plays, highlight from the vocals-stem transcript (the words the removed singer sang).
+  const src = mode === "inst" && job.sep?.status === "done" ? job.sep : job;
+  const words: Word[] = src.words ?? [], utts = src.utterances ?? [];
   if (words.length) {
     // Group words into utterance paragraphs when available.
     let ui = 0, para: HTMLElement | null = null;

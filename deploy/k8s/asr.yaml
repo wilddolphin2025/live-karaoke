@@ -23,6 +23,11 @@ spec:
             - {name: TRANSLATOR_URL, value: "http://translator:8080"}
             - {name: TRANSLATE_IDLE_MINUTES, value: "10"}   # back to 2 ASR pods after this idle time
             - {name: ASR_REPLICAS, value: "2"}
+            - {name: SEPARATOR_URL, value: "http://separator:8001"}
+            - {name: SEPARATOR_IDLE_MINUTES, value: "5"}     # separator back to 0 after this idle time
+            - {name: JOBS_DIR, value: /jobs}
+            - {name: JOB_TTL_MINUTES, value: "60"}           # job files deleted after this
+            - {name: JOBS_MAX_ACTIVE, value: "3"}
             - name: POD_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
           resources:
@@ -41,10 +46,14 @@ spec:
             failureThreshold: 3
           lifecycle:
             preStop: {sleep: {seconds: 5}}   # let the Service drop us before SIGTERM
-          volumeMounts: [{name: models, mountPath: /models}]
+          volumeMounts:
+            - {name: models, mountPath: /models}
+            - {name: jobs, mountPath: /jobs}   # vocal-removal jobs, shared with the separator pod
       volumes:
         - name: models                     # reuse the host HF cache: no 2.5 GB redownload
           hostPath: {path: /home/ykiryanov/.cache/huggingface, type: Directory}
+        - name: jobs
+          hostPath: {path: /home/ykiryanov/.cache/parakeet-jobs, type: DirectoryOrCreate}
 ---
 apiVersion: v1
 kind: Service

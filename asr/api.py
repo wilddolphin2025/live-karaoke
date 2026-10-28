@@ -1,15 +1,19 @@
 """FastAPI app exposing a Deepgram-compatible POST /v1/listen."""
 from __future__ import annotations
+import urllib.parse
 
 import asyncio
 import logging
 import os
 import uuid
+from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, Request
+from fastapi import BackgroundTasks, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+
+from asr import jobs as J
 
 from asr.audio import UndecodableAudio, decode
 from asr.engine import SAMPLE_RATE, ParakeetEngine
@@ -22,7 +26,7 @@ from asr.translate import (ADVERTISED, LANGUAGES, ModeController, TranslatorClie
                            detect_language, parse_targets)
 from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
 
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 HOSTNAME = os.environ.get("HOSTNAME", "unknown")
 MAX_BYTES = 200 * 1024 * 1024
@@ -30,6 +34,7 @@ TIMEOUT_S = 300
 # How long a translate request waits for the translator before answering 503 + Retry-After.
 TRANSLATE_WAIT_S = float(os.environ.get("TRANSLATE_WAIT_S", "20"))
 RETRY_AFTER_S = 15
+LANG_PATTERN = "^(auto|bg|cs|da|de|el|en|es|et|fi|fr|hr|hu|it|lt|lv|mt|nl|pl|pt|ro|ru|sk|sl|sv|uk)$"
 
 
 class ApiError(Exception):
@@ -46,7 +51,14 @@ async def lifespan(app: FastAPI):
     app.state.translator = TranslatorClient()
     app.state.modes = ModeController()
     app.state.modes.start()
+    app.state.jobs = J.JobStore()
+    app.state.separator = J.HttpSeparator(app.state.modes)
+    app.state.job_tasks = set()
+    cleanup = asyncio.create_task(J.cleanup_loop(app.state.jobs), name="jobs-cleanup")
     yield
+    cleanup.cancel()
+    for t in list(app.state.job_tasks):
+        t.cancel()
     await app.state.modes.stop()
     await app.state.worker.stop()
 
@@ -130,6 +142,8 @@ async def info(request: Request):
         **request.app.state.versions,
         "pod": HOSTNAME,
         "word_timestamps": getattr(engine, "word_timestamps", False),
+        "separation": {"enabled": True, "on_demand": True, "models": {"gpu": "htdemucs_ft", "cpu": "htdemucs"},
+                       "job_ttl_minutes": request.app.state.jobs.ttl_s / 60, "max_active": J.MAX_ACTIVE},
         "translation": {"model": request.app.state.translator.model,
                         "languages": ADVERTISED,
                         "accepted_language_codes": len(LANGUAGES),
@@ -204,12 +218,15 @@ async def translate_sentences(request: Request, body: TranslateRequest):
 @app.post("/v1/listen", response_model=ListenResponse, response_model_exclude_none=True)
 async def listen(
     request: Request,
+    background: BackgroundTasks,
     utterances: bool = Query(False, description="Return timed segments"),
     model: str = Query("parakeet", description="Accepted for Deepgram compatibility"),
-    language: str = Query("auto", pattern="^(auto|bg|cs|da|de|el|en|es|et|fi|fr|hr|hu|it|lt|lv|mt|nl|pl|pt|ro|ru|sk|sl|sv|uk)$",
+    language: str = Query("auto", pattern=LANG_PATTERN,
                           description="ISO 639-1 code of the speech, or auto"),
     translate: str | None = Query(None, description="Target language code(s), comma-separated, e.g. en or en,de (Deepgram name)"),
     paragraphs: bool = Query(False, description="Deepgram paragraphs: timed sentences per paragraph"),
+    separate: str | None = Query(None, pattern="^vocals$",
+                                 description="Extension: also start a vocal-removal job after the response"),
 ):
     targets: list[str] = []
     if translate:
@@ -241,6 +258,13 @@ async def listen(
         raise ApiError(504, "TIMEOUT", "Transcription timed out.") from None
 
     transcript = " ".join(s.text.strip() for s in segments if s.text.strip())
+    sep_info = None
+    if separate:  # only on explicit request; Demucs starts after this response is sent
+        try:
+            sep_info = _job_links(_create_job(request, body, language))
+            background.add_task(_start_job, request.app, sep_info["job_id"])
+        except ApiError as e:
+            sep_info = {"status": "rejected", "error": {"err_code": e.code, "err_msg": e.msg}}
     seg_tr: dict[str, list[str]] = {}
     if targets:
         source = language if language != "auto" else detect_language(transcript)
@@ -253,7 +277,8 @@ async def listen(
         metadata=Metadata(request_id=request.state.request_id,
                           duration=round(len(audio) / SAMPLE_RATE, 3),
                           models=[request.app.state.worker.engine.model_name]
-                          + ([request.app.state.translator.model] if targets else [])),
+                          + ([request.app.state.translator.model] if targets else []),
+                          separate=sep_info),
         results=Results(
             channels=[Channel(detected_language=detect_language(transcript) if language == "auto" else None,
                               alternatives=[Alternative(
@@ -271,3 +296,99 @@ async def listen(
                         for i, s in enumerate(segments)] if utterances else None,
         ),
     )
+
+
+# --------------------------------------------------------------------------- vocal removal jobs (extension)
+def _job_links(job: dict) -> dict:
+    i = job["job_id"]
+    return {"job_id": i, "status": job["status"], "status_url": f"/v1/jobs/{i}",
+            "download_url": f"/v1/jobs/{i}/download"}
+
+
+def _create_job(request: Request, body: bytes, language: str) -> dict:
+    store: J.JobStore = request.app.state.jobs
+    if store.active_count() >= J.MAX_ACTIVE:
+        raise ApiError(503, "SERVER_BUSY", f"{J.MAX_ACTIVE} vocal-removal jobs already running; retry later.",
+                       {"Retry-After": "60"})
+    if store.free_gb() < J.MIN_FREE_GB:
+        raise ApiError(503, "INSUFFICIENT_STORAGE", "Not enough free disk for a vocal-removal job; retry later.",
+                       {"Retry-After": "300"})
+    # X-Filename may be percent-encoded (headers are latin-1); only the basename is kept.
+    name = urllib.parse.unquote(request.headers.get("x-filename") or "").replace("\\", "/").rsplit("/", 1)[-1][:200]
+    ext = J.media_ext(name, request.headers.get("content-type"))
+    job_id = store.new_id()
+    job = store.create(job_id, filename=name or f"media{ext}", language=language,
+                       request_id=request.state.request_id)
+    (store.dir(job_id) / f"input{ext}").write_bytes(body)
+    return job
+
+
+def _build_result(segments, duration: float) -> dict:
+    """Deepgram-shaped transcript of the vocals stem."""
+    transcript = " ".join(s.text.strip() for s in segments if s.text.strip())
+    return {"duration": duration, "transcript": transcript,
+            "words": [{"word": w.word, "start": w.start, "end": w.end, "confidence": w.confidence,
+                       "punctuated_word": w.word} for s in segments for w in s.words],
+            "utterances": [{"start": s.start, "end": s.end, "transcript": s.text} for s in segments],
+            "paragraphs": _paragraphs(segments, transcript).model_dump()}
+
+
+async def _start_job(app, job_id: str) -> None:
+    async def transcribe(audio, language):
+        return await asyncio.wait_for(app.state.worker.submit(audio, language), TIMEOUT_S)
+    t = asyncio.create_task(J.run_job(app.state.jobs, job_id, separator=app.state.separator,
+                                      transcribe=transcribe, build_result=_build_result), name=f"job-{job_id}")
+    app.state.job_tasks.add(t)
+    t.add_done_callback(app.state.job_tasks.discard)
+
+
+def _public(job: dict) -> dict:
+    out = {k: job.get(k) for k in ("job_id", "status", "stage", "progress", "created", "updated", "expires_at",
+                                   "filename", "language", "device", "model", "is_video", "size", "timings",
+                                   "error", "result") if k in job}
+    return {**out, **_job_links(job)}
+
+
+def _job(request: Request, job_id: str) -> dict:
+    try:
+        job = request.app.state.jobs.read(job_id)
+    except KeyError:
+        job = None
+    if job is None:
+        raise ApiError(404, "NOT_FOUND", "No such job (unknown id, deleted, or expired).")
+    return job
+
+
+@app.post("/v1/separate", status_code=202)
+async def separate_vocals(request: Request, language: str = Query("auto", pattern=LANG_PATTERN)):
+    """Extension (not Deepgram): remove vocals. Raw media body (audio or video); 202 + job links."""
+    body = await request.body()
+    if not body:
+        raise ApiError(400, "Bad Request", "Request body is empty; send raw audio or video bytes.")
+    if len(body) > MAX_BYTES:
+        raise ApiError(413, "PAYLOAD_TOO_LARGE", "Media exceeds 200 MB.")
+    job = _create_job(request, body, language)
+    await _start_job(request.app, job["job_id"])
+    return JSONResponse({"request_id": request.state.request_id, **_job_links(job)}, status_code=202)
+
+
+@app.get("/v1/jobs/{job_id}")
+async def get_job(request: Request, job_id: str):
+    return _public(_job(request, job_id))
+
+
+@app.get("/v1/jobs/{job_id}/download")
+async def download_job(request: Request, job_id: str):
+    job = _job(request, job_id)
+    if job["status"] != "done":
+        raise ApiError(409, "JOB_NOT_READY", f"Job is {job['status']}; download when status is done.")
+    path = request.app.state.jobs.dir(job_id) / job["output"]
+    stem = Path(job.get("filename") or "media").stem or "media"
+    return FileResponse(path, filename=f"{stem}-karaoke{Path(job['output']).suffix}")
+
+
+@app.delete("/v1/jobs/{job_id}")
+async def delete_job(request: Request, job_id: str):
+    _job(request, job_id)
+    request.app.state.jobs.delete(job_id)
+    return {"job_id": job_id, "deleted": True}

@@ -45,3 +45,6 @@ body.panel #panes{flex-direction:column}
 .note{color:#888}
 #settings h4{margin:8px 0 0;font-size:12px;color:#444;border-top:1px solid #eee;padding-top:6px}
 #meta,footer{font-size:11px;color:#666;line-height:1.5;word-break:break-word}
+#sepbar[hidden],#sepmode[hidden],#sepdl[hidden]{display:none}
+#sepstatus{flex:1;min-height:1.2em;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sepdl{white-space:nowrap}

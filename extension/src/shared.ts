@@ -42,6 +42,8 @@ export interface JobState {
   servedBy?: string;
   requestId?: string;
   error?: string;
+  separate?: boolean;       // "Remove vocals" was on at drop: the worker starts it after transcript/translation
+  sep?: SeparationState;    // vocal-removal job (only ever when requested)
 }
 
 // IndexedDB holds the audio blob so the popup can restore its player after closing.
@@ -89,6 +91,66 @@ export function needsTranslation(job: JobState, checked: boolean, target: string
 }
 
 /** Compact settings chip for the main view, e.g. "auto → en" or "es". */
-export function summaryText(language: string, translate: boolean, target: string): string {
-  return translate ? `${language} → ${target}` : language;
+export function summaryText(language: string, translate: boolean, target: string, separate = false): string {
+  return (translate ? `${language} → ${target}` : language) + (separate ? " · no vocals" : "");
+}
+
+// ---- Vocal removal (0.6.0): strictly on demand. Only when "Remove vocals" is ticked does the extension
+// POST /v1/separate, and only after the transcript (and translation, if any) are delivered.
+export interface SeparationState {
+  jobId?: string;
+  base: string;            // server the job lives on (for polling, download and DELETE on Clear)
+  status: "starting" | "queued" | "separating" | "transcribing" | "muxing" | "done" | "error";
+  progress: number;        // 0..1
+  stage?: string;
+  device?: string;
+  model?: string;
+  downloadUrl?: string;    // absolute
+  isVideo?: boolean;
+  size?: number;
+  words?: Word[];          // vocals-stem transcript, for highlighting while the instrumental plays
+  utterances?: Utterance[];
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+}
+
+/** Should the page ask the worker to start vocal removal now? Never unless ticked; never twice;
+ *  not before the transcript is done; not while a translation for this job is still running;
+ *  not when the drop itself requested it (the worker then starts it on its own). */
+export function needsSeparation(job: JobState, checked: boolean): boolean {
+  if (!checked || job.phase !== "done" || job.sep || job.separate) return false;
+  if (job.translateTo && (!job.tr || (job.tr.status !== "done" && job.tr.status !== "error"))) return false;
+  return true;
+}
+
+/** Status line for the vocal-removal row. */
+export function sepStatusText(s: SeparationState): string {
+  const pct = `${Math.round((s.progress || 0) * 100)}%`;
+  const dev = s.device ? ` on ${s.device.toUpperCase()}` : "";
+  switch (s.status) {
+    case "starting": return "Removing vocals: uploading…";
+    case "queued": return `Removing vocals: ${s.stage && s.stage !== "queued" ? s.stage : "queued"}…`;
+    case "separating": return `Removing vocals${dev}: ${pct}${s.stage?.startsWith("starting") ? " (starting separator)" : ""}`;
+    case "transcribing": return `Removing vocals: transcribing the singer… ${pct}`;
+    case "muxing": return `Removing vocals: writing the file… ${pct}`;
+    case "done": {
+      const secs = s.finishedAt ? ` in ${((s.finishedAt - s.startedAt) / 1000).toFixed(0)}s` : "";
+      return `Instrumental ready${secs}${s.model ? ` (${s.model}${dev})` : ""}`;
+    }
+    default: return `Vocal removal failed: ${s.error ?? "error"}`;
+  }
+}
+
+/** Map a GET /v1/jobs/{id} body onto the extension's state. */
+export function applyJob(s: SeparationState, j: any): SeparationState {
+  const st = j?.status;
+  const status: SeparationState["status"] = st === "failed" || st === "cancelled" ? "error"
+    : ["queued", "separating", "transcribing", "muxing", "done"].includes(st) ? st : s.status;
+  const next: SeparationState = { ...s, status, progress: Number(j?.progress ?? s.progress) || 0, stage: j?.stage ?? s.stage,
+    device: j?.device ?? s.device, model: j?.model ?? s.model, isVideo: j?.is_video ?? s.isVideo, size: j?.size ?? s.size };
+  if (j?.download_url) next.downloadUrl = s.base + j.download_url;
+  if (status === "error") next.error = j?.error?.err_msg ?? "failed";
+  if (status === "done") { next.words = j?.result?.words ?? []; next.utterances = j?.result?.utterances ?? []; next.progress = 1; }
+  return next;
 }

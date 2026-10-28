@@ -1,0 +1,59 @@
+# On-demand vocal remover ("karaoke"): Demucs (htdemucs_ft on GPU, htdemucs on CPU) behind a tiny
+# FastAPI (asr/separator_api.py). 0 replicas by default; an ASR pod scales it to 1 ONLY when a request
+# explicitly asks for vocal removal (POST /v1/separate or /v1/listen?separate=vocals) and it goes
+# back to 0 after SEPARATOR_IDLE_MINUTES (default 5) without jobs.
+#
+# Same image as the ASR pods (parakeet-asr:dev, demucs added as a ~3 MB pip layer): no new image to pull or pin.
+# GPU without a time-slicing slot: runtimeClass nvidia + NVIDIA_VISIBLE_DEVICES=all exposes the GPU
+# while both nvidia.com/gpu slots stay with ASR/translator. It only uses CUDA when >= 900 MiB VRAM is free
+# (measured peak 688 MiB reserved / ~800 MiB incl. CUDA context, chunked) and falls back to CPU
+# otherwise or on OOM, so it never pushes an ASR pod out of memory.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: separator}
+spec:
+  replicas: 0
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: separator}}
+  template:
+    metadata: {labels: {app: separator}}
+    spec:
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: separator
+          image: parakeet-asr:dev
+          imagePullPolicy: Never
+          command: [uvicorn, asr.separator_api:app, --host, 0.0.0.0, --port, "8001"]
+          ports: [{containerPort: 8001}]
+          env:
+            - {name: NVIDIA_VISIBLE_DEVICES, value: all}
+            - {name: NVIDIA_DRIVER_CAPABILITIES, value: "compute,utility"}
+            - {name: TORCH_HOME, value: /models/torch}     # Demucs weights (~400 MB), cached on the host
+            - {name: JOBS_DIR, value: /jobs}
+            - {name: SEPARATOR_MODEL, value: htdemucs_ft}  # GPU
+            - {name: SEPARATOR_CPU_MODEL, value: htdemucs} # CPU fallback (4x faster than _ft on CPU)
+            - {name: SEPARATOR_MIN_FREE_VRAM_MB, value: "900"}
+            - {name: SEPARATOR_CHUNK_S, value: "30"}
+            - {name: OMP_NUM_THREADS, value: "6"}
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {memory: 5Gi}        # measured max RSS 2.6 GiB (htdemucs_ft, 160 s song)
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8001}
+            periodSeconds: 3
+          volumeMounts:
+            - {name: models, mountPath: /models}
+            - {name: jobs, mountPath: /jobs}
+      volumes:
+        - name: models
+          hostPath: {path: /home/ykiryanov/.cache/huggingface, type: Directory}
+        - name: jobs
+          hostPath: {path: /home/ykiryanov/.cache/parakeet-jobs, type: DirectoryOrCreate}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: separator}
+spec:
+  selector: {app: separator}
+  ports: [{port: 8001, targetPort: 8001}]

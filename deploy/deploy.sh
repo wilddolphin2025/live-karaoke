@@ -29,12 +29,18 @@ fi
 # Keep the current translator replica count (0 unless translate mode is active);
 # a plain apply would reset it to the manifest's 0.
 TR=$(kubectl get deploy translator -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)
+SEP=$(kubectl get deploy separator -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)
 # 0.6.0 replaced Riva-Translate with TranslateGemma and renamed riva-translate -> translator.
 kubectl delete deploy/riva-translate svc/riva-translate --ignore-not-found
 kubectl apply -f deploy/k8s/gpu-sharing.yaml -f deploy/k8s/rbac.yaml \
-  -f deploy/k8s/translator.yaml -f deploy/k8s/asr.yaml
+  -f deploy/k8s/translator.yaml -f deploy/k8s/separator.yaml -f deploy/k8s/asr.yaml
 if [ "${TR:-0}" -gt 0 ]; then
   kubectl scale deploy/translator --replicas=0   # restart in plain asr mode
+fi
+# The separator (vocal removal) is on demand: restart it only if it was running (it picks up the new image).
+if [ "${SEP:-0}" -gt 0 ]; then
+  kubectl scale deploy/separator --replicas="$SEP"
+  kubectl rollout restart deploy/separator
 fi
 kubectl rollout restart deploy/parakeet-asr
 kubectl rollout status deploy/parakeet-asr --timeout=10m

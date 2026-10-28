@@ -1,7 +1,8 @@
 // Runs uploads so they survive the popup closing (it closes whenever it loses focus).
 // Flow: POST /v1/listen?paragraphs=true (plain Deepgram, fast) -> show transcript -> then
-// POST /v1/translate one timed sentence at a time, publishing each translation as it lands.
-import { BUILD, clearAudio, getAudio, setState, JobState, Sentence, TranslationState } from "./shared";
+// POST /v1/translate one timed sentence at a time, publishing each translation as it lands ->
+// only if "Remove vocals" is on: POST /v1/separate and poll the job (0.6.0).
+import { BUILD, LANGS, applyJob, clearAudio, getAudio, getState, setState, JobState, SeparationState, Sentence, TranslationState } from "./shared";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false }).catch(() => {});
@@ -9,17 +10,26 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === "transcribe") {
-    void run(msg.url as string, msg.mime as string, msg.base as string, msg.language as string, msg.translateTo as string | undefined);
+    void run(msg.url as string, msg.mime as string, msg.base as string, msg.language as string, msg.translateTo as string | undefined,
+      msg.separate === true);
     reply({ ok: true, build: BUILD });
   } else if (msg?.type === "translate") {
     // Translate the finished transcript (Translate ticked, or target changed, after the file was dropped).
     void retranslate(msg.base as string, msg.language as string, msg.translateTo as string);
     reply({ ok: true, build: BUILD });
   }
+  else if (msg?.type === "separate") {
+    // "Remove vocals" ticked after the transcript (or the drop predates the tick): start it now.
+    void separate(msg.language as string);
+    reply({ ok: true, build: BUILD });
+  }
   else if (msg?.type === "clear") {
-    // Clear button: cancel any running upload/translation loop, drop the stored audio and job.
-    generation++; clearInterval(keepAlive);
-    void clearAudio().catch(() => {}).then(() => setState({ phase: "idle" })).then(() => reply({ ok: true, build: BUILD }));
+    // Clear button: cancel any running upload/translation/separation loop, delete the server job,
+    // drop the stored audio and job.
+    generation++; sepGen++; clearInterval(keepAlive);
+    void getState().then((j) => { const s = j.sep; if (s?.jobId) return fetch(`${s.base}/v1/jobs/${s.jobId}`, { method: "DELETE" }).then(() => {}); })
+      .catch(() => {})
+      .then(() => clearAudio()).catch(() => {}).then(() => setState({ phase: "idle" })).then(() => reply({ ok: true, build: BUILD }));
     return true;
   }
   return false;
@@ -28,6 +38,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 // Keep the worker alive during long jobs (MV3 idles out after ~30s without events).
 let keepAlive: ReturnType<typeof setInterval> | undefined;
 let generation = 0;  // a newer job cancels an older translation loop
+let sepGen = 0;      // a newer job or Clear cancels vocal-removal polling
 
 // The first translate call switches the cluster to translate mode (1 ASR pod + translator, ~1 min):
 // 503 + Retry-After until it is up. Retry for up to ~8 minutes.
@@ -41,11 +52,13 @@ async function readJson(r: Response): Promise<{ text: string; data: any }> {
   return { text, data };
 }
 
-async function run(url: string, mime: string, base: string, language: string, translateTo?: string) {
+async function run(url: string, mime: string, base: string, language: string, translateTo?: string, separateVocals = false) {
   const audio = await getAudio();
   if (!audio) return;
   const gen = ++generation;
-  const job: JobState = { phase: "running", fileName: audio.name, startedAt: Date.now(), translateTo };
+  sepGen++;  // a previous file's vocal-removal polling stops
+  const job: JobState = { phase: "running", fileName: audio.name, startedAt: Date.now(), translateTo,
+    ...(separateVocals ? { separate: true } : {}) };
   await setState(job);
   clearInterval(keepAlive);
   keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
@@ -85,6 +98,9 @@ async function run(url: string, mime: string, base: string, language: string, tr
       else await setState({ ...done, tr: { target: translateTo, status: "error", done: 0, total: 0, items: [], startedAt: Date.now(),
         finishedAt: Date.now(), error: "no sentences in the transcript to translate" } });
     }
+    // Post-processing, strictly on demand: only when "Remove vocals" was on at drop, and only now that
+    // the transcript and translation have been delivered.
+    if (separateVocals && gen === generation) await separate(language, base);
   } catch (e) {
     await setState({ ...job, phase: "error", finishedAt: Date.now(), error: `Extension error: ${(e as Error).message}` });
   } finally { if (gen === generation) clearInterval(keepAlive); }
@@ -114,7 +130,11 @@ async function translateAll(job: JobState, base: string, language: string, targe
   const source = language === "auto" ? job.detectedLanguage ?? "auto" : language;
   const tr: TranslationState = { target, status: "warming", done: 0, total: sentences.length,
     items: sentences.map(() => null), startedAt: Date.now() };
-  const publish = async () => { if (gen === generation) await setState({ ...job, tr: { ...tr, items: [...tr.items] } }); };
+  const publish = async () => {
+    if (gen !== generation) return;
+    const sep = (await getState()).sep;  // keep a vocal-removal job that may be running alongside a retranslation
+    await setState({ ...job, ...(sep ? { sep } : {}), tr: { ...tr, items: [...tr.items] } });
+  };
   const post = async (batch: Sentence[]): Promise<any> => {
     for (let attempt = 1; ; attempt++) {
       if (gen !== generation) return null;
@@ -153,4 +173,55 @@ async function translateAll(job: JobState, base: string, language: string, targe
   } catch (e) {
     tr.status = "error"; tr.error = (e as Error).message; tr.finishedAt = Date.now(); await publish();
   }
+}
+
+// ---- vocal removal (only ever called for an explicit "Remove vocals")
+async function separate(language: string, baseArg?: string) {
+  const job0 = await getState();
+  if (job0.phase !== "done" || (job0.sep && job0.sep.status !== "error")) return;
+  const audio = await getAudio();
+  if (!audio) return;
+  const g = ++sepGen;
+  const base = (baseArg ?? ((await chrome.storage.local.get({ server: "" })).server as string)).replace(/\/+$/, "");
+  let sep: SeparationState = { base, status: "starting", progress: 0, startedAt: Date.now() };
+  const publish = async () => {
+    if (g !== sepGen) return false;
+    const cur = await getState();
+    if (cur.phase !== "done") return false;
+    await setState({ ...cur, sep });
+    return true;
+  };
+  const fail = async (error: string) => { sep = { ...sep, status: "error", error, finishedAt: Date.now() }; await publish(); };
+  const ka = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
+  try {
+    if (!(await publish())) return;
+    const lang = LANGS.includes(language) ? language : "auto";
+    let r: Response;
+    try {
+      r = await fetch(`${base}/v1/separate?language=${encodeURIComponent(lang)}`, { method: "POST",
+        headers: { "Content-Type": audio.blob.type || "application/octet-stream", "X-Filename": encodeURIComponent(audio.name) },
+        body: audio.blob });
+    } catch (e) { await fail(`could not reach the server (${(e as Error).message})`); return; }
+    const { text, data } = await readJson(r);
+    if (r.status === 404) { await fail("server predates /v1/separate (redeploy the service to 0.7.0)"); return; }
+    if (!r.ok) { await fail(`Error ${r.status}: ${data?.err_msg ?? text.slice(0, 200)}`); return; }
+    sep = applyJob({ ...sep, jobId: data.job_id, status: "queued" }, data);
+    if (!(await publish())) return;
+    for (let misses = 0; ;) {
+      await sleep(2000);
+      if (g !== sepGen) return;
+      let p: Response;
+      try { p = await fetch(`${base}/v1/jobs/${sep.jobId}`); }
+      catch { if (++misses > 15) { await fail("lost contact with the server"); return; } continue; }
+      if (p.status === 404) { await fail("job expired or was deleted on the server"); return; }
+      const j = (await readJson(p)).data;
+      if (!p.ok || !j) { if (++misses > 15) { await fail(`Error ${p.status}`); return; } continue; }
+      misses = 0;
+      sep = applyJob(sep, j);
+      if (sep.status === "done" || sep.status === "error") sep.finishedAt = Date.now();
+      if (!(await publish())) return;
+      if (sep.status === "done" || sep.status === "error") return;
+    }
+  } catch (e) { await fail(`Extension error: ${(e as Error).message}`); }
+  finally { clearInterval(ka); }
 }

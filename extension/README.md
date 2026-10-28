@@ -60,6 +60,7 @@ details of the last file and the version info (Extension, Service, Model, NeMo, 
 - **Server**: default `http://192.168.8.226:30800` (NodePort). `https://slim` (Traefik) also works. Any other URL triggers a one-time Chrome permission prompt (`optional_host_permissions`).
 - **Spoken language**: `auto` or a language code.
 - **Translate to** + target language.
+- **Remove vocals (karaoke)**: off by default; see below.
 
 All are saved in `chrome.storage.local`.
 
@@ -79,3 +80,14 @@ then fills sentence by sentence via `POST /v1/translate`. Status line: "Translat
 cluster switches to translate mode (503 + Retry-After is retried automatically), then "Translating n/m sentences".
 During playback the word highlight continues in the transcript and the translated sentence covering the current time
 is highlighted too; click a translated sentence to seek. Copy/Download include the translation.
+
+## Remove vocals (0.6.0)
+
+Settings → **Remove vocals (karaoke)**, **off by default**; nothing is ever separated unless it is ticked. When on:
+after the transcript (and the translation, if Translate is on) the background worker uploads the file to
+`POST /v1/separate` and polls `GET /v1/jobs/<id>` every 2 s. A row under the status line shows progress
+("Removing vocals on CUDA: 42%"), then **⬇ Download** (video with the lead voice removed, or an instrumental mp3) and a
+**🎶 Instrumental / 🎤 Original** switch for the player; while the instrumental plays, the words highlighted are the
+singer's (ASR on the vocals stem). Ticking it after a transcript removes the vocals of that file. **✕ Clear** cancels
+polling and sends `DELETE /v1/jobs/<id>`, which deletes the job on the server. The chip shows "· no vocals" when on.
+Needs service 0.7.0 (older servers: "server predates /v1/separate").

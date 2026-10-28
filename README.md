@@ -65,13 +65,81 @@ and 400 rules as `/v1/listen?translate=`. `/v1/listen?translate=` keeps working 
 Env: `TRANSLATOR_URL` (http://translator:8080), `TRANSLATOR_DEPLOYMENT` (translator), `TRANSLATE_IDLE_MINUTES` (10), `ASR_REPLICAS` (2),
 `TRANSLATE_WAIT_S` (20, how long a request waits for a warming translator before 503).
 
+## Vocal removal / karaoke (service 0.7.0, extension 0.6.0)
+
+**Strictly opt-in.** The server never runs Demucs unless a request explicitly asks for it (`POST /v1/separate`
+or `/v1/listen?separate=vocals`). Plain `/v1/listen` and `/v1/translate` are unchanged, and the transcript and
+translation are never delayed: separation is post-processing that runs after them, in the background.
+
+Pipeline per job: decode → **Demucs** (vocals / instrumental) → ASR on the **vocals stem** (words with timestamps;
+the "singer transcript") → output:
+- video input → `<name>-karaoke.<ext>`: the video stream copied bit-exact (`-c:v copy`) + instrumental audio;
+- audio input → `<name>-karaoke.mp3`: the instrumental.
+
+### API (extension, not part of Deepgram)
+```
+POST /v1/separate?language=auto      raw audio/video body, optional X-Filename (percent-encoded ok), max 200 MB
+202 {"request_id", "job_id", "status": "queued", "status_url": "/v1/jobs/<id>", "download_url": "/v1/jobs/<id>/download"}
+
+GET  /v1/jobs/<id>      200 {job_id, status: queued|separating|transcribing|muxing|done|failed|cancelled, stage,
+                             progress 0..1, created, updated, expires_at, filename, language, device, model, is_video,
+                             size, timings, error?, result? (done: {transcript, words[], utterances[]} of the vocals stem),
+                             status_url, download_url}
+GET  /v1/jobs/<id>/download   the karaoke file (Content-Disposition: attachment; <stem>-karaoke.<ext>, Range ok)
+DELETE /v1/jobs/<id>    cancels a running job and deletes its files
+
+POST /v1/listen?...&separate=vocals   normal Deepgram response, delivered as usual; the job is started afterwards
+                                      and announced in metadata.separate = {job_id, status, status_url, download_url}
+                                      (or {status: "rejected", error} if it could not be queued; the transcript is still returned).
+```
+Errors are Deepgram-style `{"err_code", "err_msg", "request_id"}`: `404 NOT_FOUND` (unknown/expired/deleted job),
+`409 JOB_NOT_READY` (download before done), `503 SERVER_BUSY` + `Retry-After` (JOBS_MAX_ACTIVE jobs running),
+`503 INSUFFICIENT_STORAGE` (free disk < JOBS_MIN_FREE_GB), `413 PAYLOAD_TOO_LARGE`, `400` for an empty body.
+A failed job reports `status: failed` with `error: {err_code: SEPARATOR_UNAVAILABLE | SEPARATOR_ERROR | JOB_LOST | ..., err_msg}`.
+
+**Deviations from Deepgram** (Deepgram has no source separation): `/v1/separate`, `/v1/jobs/*`, the `separate=`
+query parameter and `metadata.separate` are all additions; Deepgram's async model is callbacks, this is polling.
+Job files (input, stems, output) live in a hostPath shared by the ASR pods and the separator
+(`~/.cache/parakeet-jobs`) and are deleted after `JOB_TTL_MINUTES` (60) or on DELETE; jobs with no heartbeat for
+`JOB_STALE_S` are marked `JOB_LOST`.
+
+### Separator Deployment (on demand, scales to 0)
+`deploy/k8s/separator.yaml`: Deployment `separator` (replicas 0) running `asr.separator_api` from the same
+`parakeet-asr:dev` image (+ ~3 MB demucs layer; no new image). The ModeController scales it to 1 when a job arrives and
+back to 0 after `SEPARATOR_IDLE_MINUTES` (5) idle. It takes **no GPU time-slice**: it sees the GPU via
+`runtimeClass nvidia` and uses CUDA only when ≥ `SEPARATOR_MIN_FREE_VRAM_MB` (900) is free, else CPU; a CUDA OOM retries
+on CPU. One job at a time; memory request 2 Gi / limit 5 Gi. Weights (402 MB, `htdemucs_ft` + `htdemucs`) are in
+`~/.cache/huggingface/torch`, offline.
+
+Chunked inference: 30 s chunks with 1 s linear crossfade (`SEPARATOR_CHUNK_S`, `SEPARATOR_OVERLAP_S`), Demucs
+segment 7.8 s, so memory is bounded regardless of song length.
+
+Measured (160 s song, RTX 3050 4 GB):
+
+| model | device | time | peak VRAM (alloc / reserved / nvidia-smi Δ) | max RSS |
+|---|---|---|---|---|
+| htdemucs_ft (GPU default) | cuda | 50.6 s | 544 / 688 / ~797 MiB | 2.6 GiB |
+| htdemucs | cuda | 14 s | 544 / 688 / 797 MiB | 1.9 GiB |
+| htdemucs (CPU default) | cpu | 50.7 s | – | 1.7 GiB |
+
+End to end in the separator container with the live ASR (GPU had ~800 MiB free, so CPU path): mp4 60.5 s total
+(separate 56.2, vocals ASR 1.9, mux 2.2; 303 words; container peak 1.54 GiB, GPU untouched); ogg → mp3 57.9 s.
+
+Env (ASR pods): `JOBS_DIR` (/jobs), `JOB_TTL_MINUTES` (60), `JOB_STALE_S` (600), `JOBS_MAX_ACTIVE` (3),
+`JOBS_MIN_FREE_GB` (5), `SEPARATOR_URL` (http://separator:8001), `SEPARATOR_WAIT_S` (600),
+`SEPARATOR_DEPLOYMENT` (separator), `SEPARATOR_IDLE_MINUTES` (5).
+Env (separator): `SEPARATOR_MODEL` (htdemucs_ft), `SEPARATOR_CPU_MODEL` (htdemucs), `SEPARATOR_DEVICE` (auto|cuda|cpu),
+`SEPARATOR_MIN_FREE_VRAM_MB` (900), `SEPARATOR_CHUNK_S` (30), `SEPARATOR_OVERLAP_S` (1), `SEPARATOR_SEGMENT_S` (7.8),
+`TORCH_HOME` (/models/torch). `GET /v1/info` has a `separation` block.
+
 ## Deploy
-`deploy/deploy.sh` (needs sudo for the image import). It applies gpu-sharing, rbac, translator (0 replicas) and ASR,
+It also applies `separator.yaml` (0 replicas, scaled on demand; a running separator is restarted on the new code). `deploy/deploy.sh` (needs sudo for the image import). It applies gpu-sharing, rbac, translator (0 replicas) and ASR,
 and resets to `asr` mode (0.6.0: also deletes the old `riva-translate` Deployment/Service). The translator's
 initContainer downloads the 2.5 GB GGUF into
 `~/.cache/huggingface/gguf/` on first start if missing.
 
 ## Tests
+`tests/test_separate.py`: chunking/crossfade, job store lifecycle/TTL, cancellation, output naming, mux packet equality, the job API with fakes. Extension: `npm test` (pure helpers), `scripts/e2e.mjs` (live, puppeteer), `scripts/sep_e2e.mjs` + `scripts/sep_mock.py` (Remove vocals flow against a mock server).
 `pytest -m "not accuracy"`; `tests/test_translate.py` also has a live ru→en test (`ASR_URL=...`, marked `accuracy`).
 
 ### Translation quality notes (service 0.5.1+)

@@ -262,6 +262,7 @@ class TranslatorClient:
 # --------------------------------------------------------------------------- mode switching
 SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 LAST_USED = "parakeet.io/translate-last-used"
+SEP_LAST_USED = "parakeet.io/separator-last-used"
 DELETION_COST = "controller.kubernetes.io/pod-deletion-cost"
 
 
@@ -281,6 +282,9 @@ class ModeController:
         self.tr = os.environ.get("TRANSLATOR_DEPLOYMENT", "translator")
         self.asr_replicas = int(os.environ.get("ASR_REPLICAS", "2"))
         self.idle_s = float(os.environ.get("TRANSLATE_IDLE_MINUTES", "10")) * 60
+        self.sep = os.environ.get("SEPARATOR_DEPLOYMENT", "separator")
+        self.sep_idle_s = float(os.environ.get("SEPARATOR_IDLE_MINUTES", "5")) * 60
+        self._sep_last = 0.0
         self.enabled = os.path.exists(f"{SA_DIR}/token") and os.environ.get("TRANSLATE_MODE_SWITCH", "1") == "1"
         self.api = "https://kubernetes.default.svc"
         self._task: asyncio.Task | None = None
@@ -336,25 +340,57 @@ class ModeController:
             await self._patch(c, self._dep(self.asr) + "/scale", {"spec": {"replicas": 1}})
             await self._patch(c, self._dep(self.tr) + "/scale", {"spec": {"replicas": 1}})
 
+    async def ensure_separator(self) -> None:
+        """Only called for an explicit vocal-removal request: mark use and scale the separator to 1."""
+        if not self.enabled:
+            return
+        async with self._client() as c:
+            now = time.time()
+            if now - self._sep_last > 20:
+                self._sep_last = now
+                await self._patch(c, self._dep(self.sep), {"metadata": {"annotations": {
+                    SEP_LAST_USED: datetime.now(timezone.utc).isoformat(timespec="seconds")}}})
+            dep = (await c.get(self._dep(self.sep))).json()
+            if dep["spec"].get("replicas", 0) < 1:
+                log.info("starting the separator (requested on %s)", self.pod)
+                await self._patch(c, self._dep(self.sep) + "/scale", {"spec": {"replicas": 1}})
+
+    async def _translator_tick(self, c) -> None:
+        tr = (await c.get(self._dep(self.tr))).json()
+        if not tr["spec"].get("replicas", 0):
+            return
+        last = tr["metadata"].get("annotations", {}).get(LAST_USED)
+        age = (time.time() - datetime.fromisoformat(last).timestamp()) if last else 1e9
+        if age < self.idle_s:
+            return
+        log.info("translator idle %.0fs: back to asr mode", age)
+        await self._patch(c, self._dep(self.tr) + "/scale", {"spec": {"replicas": 0}})
+        await self._patch(c, self._dep(self.asr) + "/scale", {"spec": {"replicas": self.asr_replicas}})
+        await self._patch(c, f"/api/v1/namespaces/{self.ns}/pods/{self.pod}",
+                          {"metadata": {"annotations": {DELETION_COST: None}}})
+
+    async def _separator_tick(self, c) -> None:
+        r = await c.get(self._dep(self.sep))
+        if r.status_code == 404:
+            return
+        dep = r.json()
+        if not dep["spec"].get("replicas", 0):
+            return
+        last = dep["metadata"].get("annotations", {}).get(SEP_LAST_USED)
+        age = (time.time() - datetime.fromisoformat(last).timestamp()) if last else 1e9
+        if age >= self.sep_idle_s:
+            log.info("separator idle %.0fs: scaling to 0", age)
+            await self._patch(c, self._dep(self.sep) + "/scale", {"spec": {"replicas": 0}})
+
     async def _idle_loop(self) -> None:
         while True:
             await asyncio.sleep(30)
-            try:
-                async with self._client() as c:
-                    tr = (await c.get(self._dep(self.tr))).json()
-                    if not tr["spec"].get("replicas", 0):
-                        continue
-                    last = tr["metadata"].get("annotations", {}).get(LAST_USED)
-                    age = (time.time() - datetime.fromisoformat(last).timestamp()) if last else 1e9
-                    if age < self.idle_s:
-                        continue
-                    log.info("translator idle %.0fs: back to asr mode", age)
-                    await self._patch(c, self._dep(self.tr) + "/scale", {"spec": {"replicas": 0}})
-                    await self._patch(c, self._dep(self.asr) + "/scale", {"spec": {"replicas": self.asr_replicas}})
-                    await self._patch(c, f"/api/v1/namespaces/{self.ns}/pods/{self.pod}",
-                                      {"metadata": {"annotations": {DELETION_COST: None}}})
-            except Exception:  # noqa: BLE001 - keep looping; next tick retries
-                log.exception("idle check failed")
+            for tick in (self._translator_tick, self._separator_tick):
+                try:
+                    async with self._client() as c:
+                        await tick(c)
+                except Exception:  # noqa: BLE001 - keep looping; next tick retries
+                    log.exception("idle check failed (%s)", tick.__name__)
 
     def start(self) -> None:
         if self.enabled:

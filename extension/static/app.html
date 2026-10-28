@@ -15,6 +15,9 @@
   </div>
   <div class="bar slim"><div id="status"></div>
     <button id="copy" disabled>Copy</button><button id="dl" disabled>Download .txt</button></div>
+  <div class="bar slim" id="sepbar" hidden><div id="sepstatus"></div>
+    <button id="sepmode" hidden title="Switch the player between the original and the instrumental (highlighting follows the singer)">🎶 Instrumental</button>
+    <a id="sepdl" hidden>⬇ Download</a></div>
   <div id="error" hidden></div>
   <audio id="player" controls hidden></audio>
   <video id="vplayer" controls playsinline hidden></video>
@@ -29,6 +32,10 @@
   <label class="field">Spoken language <select id="lang"></select></label>
   <div class="trrow"><label><input id="tr" type="checkbox"> Translate to</label> <select id="trlang"></select></div>
   <small class="note" id="trnote">Translation runs privately on this server: slower, lower quality. Ticking it after a transcript translates that transcript.</small>
+  <div class="trrow"><label><input id="sep" type="checkbox"> Remove vocals (karaoke)</label></div>
+  <small class="note" id="sepnote">Off by default. When on, after the transcript and translation the server removes the lead voice
+    with Demucs (about 1 min for a 3 min song) and offers a download: video keeps its picture, audio becomes an instrumental mp3.
+    The singer's words keep highlighting while the instrumental plays. The file is deleted from the server after an hour or on ✕.</small>
   <h4>Last file</h4><div id="meta">none yet</div>
   <h4>About</h4><footer id="versions"></footer>
 </section>

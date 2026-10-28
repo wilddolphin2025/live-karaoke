@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Parakeet ASR",
-  "version": "0.5.7",
-  "description": "Drop an audio file to transcribe (and optionally translate) it with the Parakeet ASR service, then play it back with word highlighting.",
+  "version": "0.6.0",
+  "description": "Drop an audio file to transcribe (and optionally translate it, or remove the vocals) with the private Parakeet ASR service, then play it back with word highlighting.",
   "action": { "default_title": "Parakeet ASR", "default_popup": "app.html", "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" } },
   "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "background": { "service_worker": "background.js" },

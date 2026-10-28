@@ -60,6 +60,7 @@ class Metadata(BaseModel):
     duration: float
     channels: int = 1
     models: list[str]
+    separate: dict | None = None   # extension: vocal-removal job started by ?separate=vocals
 
 
 class ListenResponse(BaseModel):
