@@ -1,10 +1,11 @@
-import { DEFAULT_SERVER, LANGS, JobState, Word, getAudio, getState, putAudio } from "./shared";
+import { DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, getAudio, getState, putAudio } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
 const VIDEO_EXT = new Set(["mp4", "mov", "mkv"]);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const server = $<HTMLInputElement>("server"), lang = $<HTMLSelectElement>("lang");
+const trBox = $<HTMLInputElement>("tr"), trLang = $<HTMLSelectElement>("trlang");
 const drop = $<HTMLLabelElement>("drop"), fileInput = $<HTMLInputElement>("file");
 const statusEl = $("status"), errBox = $("error"), meta = $("meta"), out = $("out"), versions = $("versions");
 const audioEl = $<HTMLAudioElement>("player"), videoEl = $<HTMLVideoElement>("vplayer");
@@ -23,9 +24,13 @@ const fmt = (s: number) => { const m = Math.floor(s / 60); return `${String(m).p
 const baseUrl = () => (server.value.trim() || DEFAULT_SERVER).replace(/\/+$/, "");
 
 for (const l of LANGS) lang.add(new Option(l, l));
-const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto" }).then((s) => {
+for (const [code, name] of TRANSLATE_LANGS) trLang.add(new Option(name, code));
+const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto", translate: false, translateTo: "en" }).then((s) => {
   server.value = s.server as string; lang.value = s.language as string;
+  trBox.checked = s.translate as boolean; trLang.value = s.translateTo as string; trLang.disabled = !trBox.checked;
 });
+trBox.addEventListener("change", () => { trLang.disabled = !trBox.checked; chrome.storage.local.set({ translate: trBox.checked }); });
+trLang.addEventListener("change", () => chrome.storage.local.set({ translateTo: trLang.value }));
 server.addEventListener("change", () => { chrome.storage.local.set({ server: baseUrl() }); void loadVersions(); });
 lang.addEventListener("change", () => chrome.storage.local.set({ language: lang.value }));
 
@@ -57,9 +62,11 @@ async function start(file: File) {
   try { if (!(await ensurePermission(base))) { showError(`Permission to access ${base} was denied.`); return; } }
   catch { showError(`Invalid server URL: ${base}`); return; }
   await putAudio(file, file.name);  // the service worker reads the audio from IndexedDB
-  const url = `${base}/v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true`;
-  await chrome.storage.session.set({ job: { phase: "running", fileName: file.name, startedAt: Date.now() } satisfies JobState });
-  await chrome.runtime.sendMessage({ type: "transcribe", url, mime });
+  const translateTo = trBox.checked ? trLang.value : undefined;
+  const url = `${base}/v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true` +
+    (translateTo ? `&translate=${encodeURIComponent(translateTo)}` : "");
+  await chrome.storage.session.set({ job: { phase: "running", fileName: file.name, startedAt: Date.now(), translateTo } satisfies JobState });
+  await chrome.runtime.sendMessage({ type: "transcribe", url, mime, translateTo });
 }
 
 function showError(msg: string) { errBox.textContent = msg; errBox.hidden = false; }
@@ -87,7 +94,7 @@ async function render(job: JobState) {
   if (job.phase === "error") errBox.textContent = job.error ?? "Unknown error";
   if (job.fileName) { baseName = job.fileName.replace(/\.[^.]+$/, "") || "transcript"; await loadPlayer(job.fileName); }
   if (running) {
-    const tick = () => { statusEl.innerHTML = `<span class="spin"></span>Transcribing ${job.fileName ?? ""}… ${((Date.now() - job.startedAt!) / 1000).toFixed(1)}s`; };
+    const tick = () => { statusEl.innerHTML = `<span class="spin"></span>${job.note ?? `Transcribing${job.translateTo ? ` + translating to ${job.translateTo}` : ""} ${job.fileName ?? ""}…`} ${((Date.now() - job.startedAt!) / 1000).toFixed(1)}s`; };
     tick(); timer = setInterval(tick, 100);
     out.textContent = ""; meta.textContent = ""; copyBtn.disabled = dlBtn.disabled = true; renderedKey = "";
     return;
@@ -131,9 +138,20 @@ function renderTranscript(job: JobState) {
       spans.push({ el: d, start: u.start, end: u.end });
     }
   } else out.textContent = job.transcript || "(empty transcript)";
+  // Translations: under each utterance, or one block when there are no utterances.
+  const trOf = (u?: { translations?: { translation: string }[] }) => u?.translations?.[0]?.translation;
+  const addTr = (after: Element, text?: string) => {
+    if (!text) return; const d = document.createElement("div"); d.className = "tr"; d.textContent = text; after.after(d);
+  };
+  const perUtt = utts.some((u) => trOf(u));
+  if (perUtt) out.querySelectorAll<HTMLElement>(words.length ? ".p" : ".u").forEach((el, i) =>
+    addTr(el, trOf(utts[words.length ? Number(el.dataset.u) : i])));
+  const full = job.translations?.[0]?.translation;
+  if (full && !perUtt) { const d = document.createElement("div"); d.id = "trall"; d.className = "tr";
+    d.textContent = `${job.translations![0].language}: ${full}`; out.append(d); }
   plainText = utts.length
-    ? utts.map((u) => `[${fmt(u.start)} - ${fmt(u.end)}] ${u.transcript}`).join("\n") + "\n"
-    : (job.transcript ?? "") + "\n";
+    ? utts.map((u) => `[${fmt(u.start)} - ${fmt(u.end)}] ${u.transcript}` + (trOf(u) ? `\n    ${trOf(u)}` : "")).join("\n") + "\n"
+    : (job.transcript ?? "") + "\n" + (full ? `\n${full}\n` : "");
 }
 
 function seek(t: number) { player.currentTime = t; void player.play(); }
@@ -171,7 +189,8 @@ async function loadVersions() {
     if (r.status === 404) { versions.textContent = `${ext} · service predates /v1/info (redeploy)`; return; }
     const i = await r.json();
     versions.textContent = `${ext} · Service ${i.service_version} · Model ${i.model} · NeMo ${i.nemo_version} · torch ${i.torch_version}` +
-      ` · Pod ${i.pod}${i.gpu ? ` · ${i.gpu}` : ""}`;
+      ` · Pod ${i.pod}${i.gpu ? ` · ${i.gpu}` : ""}` +
+      (i.translation ? ` · Mode ${i.translation.mode ?? "?"}` : "");
   } catch { versions.textContent = `${ext} · service unreachable`; }
 }
 

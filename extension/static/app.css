@@ -17,4 +17,7 @@ body.panel video{max-height:40vh}
 .w{cursor:pointer;border-radius:3px}.w:hover{background:#eef}.w.cur{background:#ffe066}
 .u{margin-bottom:6px;cursor:pointer;border-radius:3px}.u.cur{background:#fff3b0}.t{color:#2a7;font-family:monospace;margin-right:6px;font-size:11px}
 .row{display:flex;gap:6px;justify-content:flex-end}
+.trrow{display:flex;gap:6px;align-items:center;font-size:12px}.trrow small{color:#888}
+.tr{color:#246;font-style:italic;margin:2px 0 8px 0;border-left:3px solid #9bd;padding-left:6px}
+#trall{border-top:1px solid #eee;margin-top:8px;padding-top:6px}
 footer{font-size:10px;color:#888;border-top:1px solid #eee;padding-top:4px;line-height:1.4}

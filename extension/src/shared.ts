@@ -1,14 +1,26 @@
 export const DEFAULT_SERVER = "http://192.168.8.226:30800";
 export const LANGS = ["auto","bg","cs","da","de","el","en","es","et","fi","fr","hr","hu","it","lt","lv","mt","nl","pl","pt","ro","ru","sk","sl","sv","uk"];
 
+// Target languages of nvidia/Riva-Translate-4B-Instruct-v2 (sent as ?translate=<code>, Deepgram's name).
+export const TRANSLATE_LANGS: [string, string][] = [["en","English"],["ar","Arabic"],["bg","Bulgarian"],["cs","Czech"],
+  ["da","Danish"],["de","German"],["el","Greek"],["es","Spanish (Europe)"],["es-us","Spanish (Latin America)"],["et","Estonian"],
+  ["fi","Finnish"],["fr","French"],["hi","Hindi"],["hr","Croatian"],["hu","Hungarian"],["id","Indonesian"],["it","Italian"],
+  ["ja","Japanese"],["ko","Korean"],["lt","Lithuanian"],["lv","Latvian"],["nl","Dutch"],["no","Norwegian"],["pl","Polish"],
+  ["pt-br","Portuguese (Brazil)"],["pt-pt","Portuguese (Portugal)"],["ro","Romanian"],["ru","Russian"],["sk","Slovak"],
+  ["sl","Slovenian"],["sv","Swedish"],["th","Thai"],["tr","Turkish"],["uk","Ukrainian"],["vi","Vietnamese"],
+  ["zh","Chinese (Simplified)"],["zh-tw","Chinese (Traditional)"]];
+export interface Translation { language: string; translation: string }
 export interface Word { word: string; start: number; end: number; punctuated_word?: string }
-export interface Utterance { start: number; end: number; transcript: string }
+export interface Utterance { start: number; end: number; transcript: string; translations?: Translation[] }
 export interface JobState {
   phase: "idle" | "running" | "done" | "error";
   fileName?: string;
   startedAt?: number;
   finishedAt?: number;
   transcript?: string;
+  translations?: Translation[];
+  translateTo?: string;
+  note?: string;          // e.g. translator warming up, retry n
   words?: Word[];
   utterances?: Utterance[];
   model?: string;

@@ -1,0 +1,75 @@
+# On-demand private translator: llama.cpp server running a Q4_K_M GGUF of
+# nvidia/Riva-Translate-4B-Instruct-v2. 0 replicas by default; the ASR pods scale it
+# to 1 (and themselves to 1) when a request asks for ?translate=..., which frees the
+# second time-sliced GPU slot and ~1.4 GB VRAM. VRAM is capped by --n-gpu-layers
+# (remaining layers run on CPU) and a small --ctx-size.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: riva-translate}
+spec:
+  replicas: 0
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: riva-translate}}
+  template:
+    metadata: {labels: {app: riva-translate}}
+    spec:
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 10
+      initContainers:
+        - name: fetch-model   # one-time 2.8 GB download into the shared HF cache
+          image: curlimages/curl:8.10.1
+          securityContext: {runAsUser: 1000, runAsGroup: 1000}
+          command: [sh, -c, 'test -s /models/gguf/$(GGUF) || (mkdir -p /models/gguf && curl -fL -o /models/gguf/$(GGUF).part $(GGUF_URL) && mv /models/gguf/$(GGUF).part /models/gguf/$(GGUF))']
+          env:
+            - {name: GGUF, value: Riva-Translate-4B-Instruct-v2-Q4_K_M.gguf}
+            - {name: GGUF_URL, value: "https://huggingface.co/shivnathtathe/nvidia_Riva-Translate-4B-Instruct-v2-GGUF/resolve/main/Riva-Translate-4B-Instruct-v2-Q4_K_M.gguf"}
+          volumeMounts: [{name: models, mountPath: /models}]
+      containers:
+        - name: llama
+          image: ghcr.io/ggml-org/llama.cpp:server-cuda
+          args:
+            - --model
+            - "/models/gguf/Riva-Translate-4B-Instruct-v2-Q4_K_M.gguf"
+            - --alias
+            - "Riva-Translate-4B-Instruct-v2"
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8080"
+            - --n-gpu-layers
+            - "$(N_GPU_LAYERS)"
+            - --ctx-size
+            - "2048"
+            - --parallel
+            - "1"
+            - --threads
+            - "8"
+            - --jinja
+          env:
+            - {name: N_GPU_LAYERS, value: "18"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {memory: 6Gi, nvidia.com/gpu: 1}
+          startupProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 3
+            failureThreshold: 100
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 15
+            failureThreshold: 4
+          volumeMounts: [{name: models, mountPath: /models, readOnly: false}]
+      volumes:
+        - name: models
+          hostPath: {path: /home/ykiryanov/.cache/huggingface, type: Directory}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: riva-translate}
+spec:
+  selector: {app: riva-translate}
+  ports: [{port: 8080, targetPort: 8080}]

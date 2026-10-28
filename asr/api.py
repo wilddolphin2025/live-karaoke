@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -13,19 +14,24 @@ from fastapi.responses import JSONResponse
 from asr.audio import UndecodableAudio, decode
 from asr.engine import SAMPLE_RATE, ParakeetEngine
 from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse,
-                         Metadata, Results, Utterance)
+                         Metadata, Results, Translation, Utterance)
+from asr.translate import (LANGUAGES, ModeController, TranslatorClient,
+                           TranslatorUnavailable, UnsupportedLanguage, parse_targets)
 from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 HOSTNAME = os.environ.get("HOSTNAME", "unknown")
 MAX_BYTES = 200 * 1024 * 1024
 TIMEOUT_S = 300
+# How long a translate request waits for the translator before answering 503 + Retry-After.
+TRANSLATE_WAIT_S = float(os.environ.get("TRANSLATE_WAIT_S", "20"))
+RETRY_AFTER_S = 15
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str, msg: str):
-        self.status, self.code, self.msg = status, code, msg
+    def __init__(self, status: int, code: str, msg: str, headers: dict | None = None):
+        self.status, self.code, self.msg, self.headers = status, code, msg, headers or {}
 
 
 @asynccontextmanager
@@ -34,7 +40,11 @@ async def lifespan(app: FastAPI):
     engine = await asyncio.to_thread(ParakeetEngine)
     app.state.worker = GpuWorker(engine)
     app.state.worker.start()
+    app.state.translator = TranslatorClient()
+    app.state.modes = ModeController()
+    app.state.modes.start()
     yield
+    await app.state.modes.stop()
     await app.state.worker.stop()
 
 
@@ -58,7 +68,9 @@ def _error(request: Request, status: int, code: str, msg: str) -> JSONResponse:
 
 @app.exception_handler(ApiError)
 async def api_error_handler(request: Request, exc: ApiError):
-    return _error(request, exc.status, exc.code, exc.msg)
+    resp = _error(request, exc.status, exc.code, exc.msg)
+    resp.headers.update(exc.headers)
+    return resp
 
 
 @app.exception_handler(RequestValidationError)
@@ -115,17 +127,53 @@ async def info(request: Request):
         **request.app.state.versions,
         "pod": HOSTNAME,
         "word_timestamps": getattr(engine, "word_timestamps", False),
+        "translation": {"model": request.app.state.translator.model,
+                        "languages": sorted(LANGUAGES),
+                        **(await request.app.state.modes.status())},
     }
 
 
-@app.post("/v1/listen", response_model=ListenResponse)
+async def _ready_translator(app) -> None:
+    """Switch the cluster to translate mode if needed and wait briefly for the translator."""
+    try:
+        await app.state.modes.ensure_translate_mode()
+    except Exception:  # RBAC/API trouble: still try the translator if it happens to be up
+        logging.getLogger("translate").exception("mode switch failed")
+    deadline = asyncio.get_running_loop().time() + TRANSLATE_WAIT_S
+    while not await app.state.translator.healthy():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise ApiError(503, "TRANSLATOR_WARMING_UP",
+                           "Switching to translate mode (one ASR pod + translator); retry shortly.",
+                           {"Retry-After": str(RETRY_AFTER_S)})
+        await asyncio.sleep(2)
+
+
+async def _translate_segments(translator, texts: list[str], targets: list[str], source: str | None):
+    """{target: [translation per segment]}; sequential, the translator handles one at a time."""
+    out: dict[str, list[str]] = {}
+    for t in targets:
+        out[t] = [await translator.translate(x, t, source) for x in texts]
+    return out
+
+
+@app.post("/v1/listen", response_model=ListenResponse, response_model_exclude_none=True)
 async def listen(
     request: Request,
     utterances: bool = Query(False, description="Return timed segments"),
     model: str = Query("parakeet", description="Accepted for Deepgram compatibility"),
     language: str = Query("auto", pattern="^(auto|bg|cs|da|de|el|en|es|et|fi|fr|hr|hu|it|lt|lv|mt|nl|pl|pt|ro|ru|sk|sl|sv|uk)$",
                           description="ISO 639-1 code of the speech, or auto"),
+    translate: str | None = Query(None, description="Target language code(s), comma-separated, e.g. en or en,de (Deepgram name)"),
 ):
+    targets: list[str] = []
+    if translate:
+        try:
+            targets = parse_targets(translate)
+        except UnsupportedLanguage as e:
+            raise ApiError(400, "Bad Request", f"Unsupported translate language: {e}. "
+                           f"Supported: {', '.join(sorted(LANGUAGES))}") from None
+        await _ready_translator(request.app)  # 503 + Retry-After while warming, before spending ASR time
+
     body = await request.body()
     if not body:
         raise ApiError(400, "Bad Request", "Request body is empty; send raw audio bytes.")
@@ -147,18 +195,31 @@ async def listen(
         raise ApiError(504, "TIMEOUT", "Transcription timed out.") from None
 
     transcript = " ".join(s.text.strip() for s in segments if s.text.strip())
+    seg_tr: dict[str, list[str]] = {}
+    if targets:
+        source = language if language != "auto" else None
+        try:
+            seg_tr = await _translate_segments(request.app.state.translator,
+                                               [s.text for s in segments], targets, source)
+        except TranslatorUnavailable as e:
+            raise ApiError(503, "TRANSLATOR_UNAVAILABLE", str(e), {"Retry-After": str(e.retry_after)}) from None
     return ListenResponse(
         metadata=Metadata(request_id=request.state.request_id,
                           duration=round(len(audio) / SAMPLE_RATE, 3),
-                          models=[request.app.state.worker.engine.model_name]),
+                          models=[request.app.state.worker.engine.model_name]
+                          + ([request.app.state.translator.model] if targets else [])),
         results=Results(
             channels=[Channel(alternatives=[Alternative(
                 transcript=transcript,
                 words=[{"word": w.word, "start": w.start, "end": w.end,
                         "confidence": w.confidence, "punctuated_word": w.word}
                        for s in segments for w in s.words],
+                translations=[Translation(language=t, translation=" ".join(x.strip() for x in v if x.strip()))
+                              for t, v in seg_tr.items()] if targets else None,
             )])],
-            utterances=[Utterance(start=s.start, end=s.end, transcript=s.text)
-                        for s in segments] if utterances else None,
+            utterances=[Utterance(start=s.start, end=s.end, transcript=s.text,
+                                  translations=[Translation(language=t, translation=v[i])
+                                                for t, v in seg_tr.items()] if targets else None)
+                        for i, s in enumerate(segments)] if utterances else None,
         ),
     )

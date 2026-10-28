@@ -4,10 +4,17 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class Translation(BaseModel):
+    """Deepgram's shape: alternatives[].translations[] = {language, translation}."""
+    language: str
+    translation: str
+
+
 class Alternative(BaseModel):
     transcript: str
     confidence: float = 1.0
     words: list[dict] = []
+    translations: list[Translation] | None = None
 
 
 class Channel(BaseModel):
@@ -19,6 +26,7 @@ class Utterance(BaseModel):
     end: float
     transcript: str
     channel: int = 0
+    translations: list[Translation] | None = None  # extension: Deepgram has none per utterance
 
 
 class Results(BaseModel):
