@@ -7,12 +7,13 @@
   <button id="pin" title="Open in side panel (stays open)">📌</button>
 </header>
 <label id="drop" tabindex="0">
-  <input id="file" type="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.webm,audio/*" hidden>
-  <div><strong>Drop audio here</strong> or click to choose<br><small>wav · mp3 · flac · ogg · m4a · webm</small></div>
+  <input id="file" type="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.webm,.mp4,.mov,.mkv,audio/*,video/*" hidden>
+  <div><strong>Drop audio or video here</strong> or click to choose<br><small>wav · mp3 · flac · ogg · m4a · webm · mp4 · mov · mkv</small></div>
 </label>
 <div id="status"></div>
 <div id="error" hidden></div>
 <audio id="player" controls hidden></audio>
+<video id="vplayer" controls playsinline hidden></video>
 <div id="meta"></div>
 <div id="out"></div>
 <div class="row"><button id="copy" disabled>Copy</button><button id="dl" disabled>Download .txt</button></div>

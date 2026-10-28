@@ -1,11 +1,15 @@
 import { DEFAULT_SERVER, LANGS, JobState, Word, getAudio, getState, putAudio } from "./shared";
 
-const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm" };
+const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
+  mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
+const VIDEO_EXT = new Set(["mp4", "mov", "mkv"]);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const server = $<HTMLInputElement>("server"), lang = $<HTMLSelectElement>("lang");
 const drop = $<HTMLLabelElement>("drop"), fileInput = $<HTMLInputElement>("file");
 const statusEl = $("status"), errBox = $("error"), meta = $("meta"), out = $("out"), versions = $("versions");
-const player = $<HTMLAudioElement>("player");
+const audioEl = $<HTMLAudioElement>("player"), videoEl = $<HTMLVideoElement>("vplayer");
+// Whichever element is showing the current file; highlighting follows its clock.
+let player: HTMLMediaElement = audioEl;
 const copyBtn = $<HTMLButtonElement>("copy"), dlBtn = $<HTMLButtonElement>("dl"), pinBtn = $<HTMLButtonElement>("pin");
 
 const isPanel = new URLSearchParams(location.search).has("panel");
@@ -47,7 +51,7 @@ async function ensurePermission(base: string): Promise<boolean> {
 
 async function start(file: File) {
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  if (!(ext in EXT_MIME) && !file.type.startsWith("audio/")) { showError(`Unsupported file type: ${file.name}`); return; }
+  if (!(ext in EXT_MIME) && !file.type.startsWith("audio/") && !file.type.startsWith("video/")) { showError(`Unsupported file type: ${file.name}`); return; }
   const mime = file.type || EXT_MIME[ext] || "application/octet-stream";
   const base = baseUrl();
   try { if (!(await ensurePermission(base))) { showError(`Permission to access ${base} was denied.`); return; } }
@@ -60,13 +64,19 @@ async function start(file: File) {
 
 function showError(msg: string) { errBox.textContent = msg; errBox.hidden = false; }
 
+const isVideo = (blob: Blob, name: string) =>
+  blob.type.startsWith("video/") || VIDEO_EXT.has(name.split(".").pop()?.toLowerCase() ?? "");
+
 async function loadPlayer(name: string) {
   if (audioKey === name && audioUrl) return;
   const a = await getAudio();
   if (!a) return;
   if (audioUrl) URL.revokeObjectURL(audioUrl);
   audioUrl = URL.createObjectURL(a.blob); audioKey = a.name;
-  player.src = audioUrl; player.hidden = false;
+  const next: HTMLMediaElement = isVideo(a.blob, a.name) ? videoEl : audioEl;
+  const other = next === videoEl ? audioEl : videoEl;
+  other.pause(); other.removeAttribute("src"); other.load(); other.hidden = true;
+  player = next; player.src = audioUrl; player.hidden = false;
 }
 
 async function render(job: JobState) {
@@ -141,9 +151,11 @@ function highlight() {
   cur = i;
   if (i >= 0) { spans[i].el.classList.add("cur"); spans[i].el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
 }
-player.addEventListener("timeupdate", highlight);
-player.addEventListener("seeked", highlight);
-player.addEventListener("play", () => { const loop = () => { highlight(); if (!player.paused) requestAnimationFrame(loop); }; requestAnimationFrame(loop); });
+for (const el of [audioEl, videoEl]) {
+  el.addEventListener("timeupdate", highlight);
+  el.addEventListener("seeked", highlight);
+  el.addEventListener("play", () => { const loop = () => { highlight(); if (!el.paused) requestAnimationFrame(loop); }; requestAnimationFrame(loop); });
+}
 
 copyBtn.addEventListener("click", async () => { await navigator.clipboard.writeText(plainText); copyBtn.textContent = "Copied!"; setTimeout(() => (copyBtn.textContent = "Copy"), 1200); });
 dlBtn.addEventListener("click", () => {

@@ -2,22 +2,21 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import os
 import uuid
 from contextlib import asynccontextmanager
 
-import soundfile as sf
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from asr.engine import SAMPLE_RATE, ParakeetEngine, to_mono_16k
+from asr.audio import UndecodableAudio, decode
+from asr.engine import SAMPLE_RATE, ParakeetEngine
 from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse,
                          Metadata, Results, Utterance)
 from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 HOSTNAME = os.environ.get("HOSTNAME", "unknown")
 MAX_BYTES = 200 * 1024 * 1024
@@ -133,11 +132,10 @@ async def listen(
     if len(body) > MAX_BYTES:
         raise ApiError(413, "PAYLOAD_TOO_LARGE", "Audio exceeds 200 MB.")
 
-    try:  # decoding is CPU work too, keep it off the loop
-        audio, sr = await asyncio.to_thread(sf.read, io.BytesIO(body), dtype="float32")
-    except Exception:
-        raise ApiError(400, "UNSUPPORTED_AUDIO", "Could not decode audio.") from None
-    audio = await asyncio.to_thread(to_mono_16k, audio, sr)
+    try:  # soundfile, then ffmpeg for mp4/m4a/mov/mkv/webm and other containers
+        audio = await decode(body)
+    except UndecodableAudio:
+        raise ApiError(400, "UNSUPPORTED_AUDIO", "Could not decode audio (tried soundfile and ffmpeg).") from None
 
     try:
         segments = await asyncio.wait_for(request.app.state.worker.submit(audio, language), TIMEOUT_S)

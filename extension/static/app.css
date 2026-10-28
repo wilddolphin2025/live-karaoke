@@ -10,6 +10,8 @@ input,select,button{font:inherit;padding:3px 6px}
 .spin{display:inline-block;width:11px;height:11px;border:2px solid #ccc;border-top-color:#2a7;border-radius:50%;animation:s 1s linear infinite;vertical-align:middle;margin-right:6px}@keyframes s{to{transform:rotate(360deg)}}
 #error{background:#fee;border:1px solid #e99;color:#900;padding:6px;border-radius:6px;white-space:pre-wrap}
 audio{width:100%;flex-shrink:0}
+video{width:100%;max-height:200px;background:#000;border-radius:6px;flex-shrink:0}
+body.panel video{max-height:40vh}
 #meta{font-size:11px;color:#666}
 #out{flex:1;min-height:80px;overflow:auto;border:1px solid #ddd;border-radius:6px;padding:8px;line-height:1.6}
 .w{cursor:pointer;border-radius:3px}.w:hover{background:#eef}.w.cur{background:#ffe066}
