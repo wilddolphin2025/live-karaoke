@@ -4,6 +4,8 @@ html,body{margin:0}
 /* Transcript only: half width; .wide (translation pane shown) uses the full 800 px. */
 body{font:13px system-ui,sans-serif;width:400px;height:600px;color:#222;overflow:hidden}
 body.wide{width:800px}
+body.empty .bar.slim{display:none}
+audio[hidden],video[hidden]{display:none!important}
 body.panel{width:auto;height:100vh}
 #mainview,#settings{height:100%;padding:8px;display:flex;flex-direction:column;gap:5px}
 #mainview[hidden],#settings[hidden]{display:none}

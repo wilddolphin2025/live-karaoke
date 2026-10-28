@@ -1,4 +1,4 @@
-import { BUILD, needsTranslation, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, getAudio, getState, putAudio } from "./shared";
+import { BUILD, needsTranslation, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
@@ -21,6 +21,7 @@ const trPane = $("trpane"), trOut = $("trout"), trStatus = $("trstatus");
 const audioEl = $<HTMLAudioElement>("player"), videoEl = $<HTMLVideoElement>("vplayer");
 // Whichever element is showing the current file; highlighting follows its clock.
 let player: HTMLMediaElement = audioEl;
+const clearBtn = $<HTMLButtonElement>("clear");
 const copyBtn = $<HTMLButtonElement>("copy"), dlBtn = $<HTMLButtonElement>("dl"), pinBtn = $<HTMLButtonElement>("pin");
 
 const isPanel = new URLSearchParams(location.search).has("panel");
@@ -98,6 +99,21 @@ async function start(file: File) {
   if (staleWorker) showError(staleWorker);
 }
 
+// Clear: back to the empty drop state (the service worker cancels its loops and wipes storage;
+// fall back to wiping it here when an older worker does not know the message).
+clearBtn.addEventListener("click", async () => {
+  const reply = await chrome.runtime.sendMessage({ type: "clear" }).catch(() => null);
+  if (!reply?.ok) { await clearAudio().catch(() => {}); await setState({ phase: "idle" }); }
+  lastAsk = ""; staleWorker = "";
+  await render({ phase: "idle" });
+});
+
+function resetPlayers() {
+  for (const el of [audioEl, videoEl]) { el.pause(); el.removeAttribute("src"); el.load(); el.hidden = true; }
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  audioUrl = undefined; audioKey = "";
+}
+
 let staleWorker = "";
 function showError(msg: string) { errBox.textContent = msg; errBox.hidden = false; }
 
@@ -120,11 +136,19 @@ async function render(job: JobState) {
   clearInterval(timer);
   lastJob = job;
   const running = job.phase === "running";
+  const idle = job.phase === "idle";
+  // Empty state: just the drop zone + buttons, no player/panes, popup shrinks to content.
+  document.body.classList.toggle("empty", idle);
+  clearBtn.hidden = idle;
+  if (idle) {
+    resetPlayers(); out.textContent = ""; trOut.textContent = ""; statusEl.textContent = ""; meta.textContent = "none yet";
+    spans = []; trSpans = []; renderedKey = ""; trKey = ""; copyBtn.disabled = dlBtn.disabled = true;
+  }
   drop.classList.toggle("busy", running);
   drop.classList.toggle("loaded", job.phase !== "idle");
   errBox.hidden = job.phase !== "error";
   if (job.phase === "error") errBox.textContent = job.error ?? "Unknown error";
-  if (job.fileName) { baseName = job.fileName.replace(/\.[^.]+$/, "") || "transcript"; await loadPlayer(job.fileName); }
+  if (job.fileName) { baseName = job.fileName.replace(/\.[^.]+$/, "") || "transcript"; await loadPlayer(job.fileName); if (lastJob !== job) return; }  // a newer state arrived while loading
   if (running) {
     const tick = () => { statusEl.innerHTML = `<span class="spin"></span>${job.note ?? `Transcribing ${job.fileName ?? ""}…`} ${((Date.now() - job.startedAt!) / 1000).toFixed(1)}s`; };
     tick(); timer = setInterval(tick, 100);
@@ -198,7 +222,8 @@ function trStatusText(tr: TranslationState): string {
 // Second pane: one block per timed source sentence, filled as translations arrive.
 function renderTranslation(job: JobState) {
   const tr = job.tr, sents = job.sentences ?? [];
-  const wanted = trBox.checked || (job.phase === "running" || !tr ? !!job.translateTo : true);
+  // The translation pane (and the 800 px width) only when Translate is ticked and there is a transcript (or one coming).
+  const wanted = trBox.checked && (job.phase === "running" || job.phase === "done");
   trPane.hidden = !wanted;
   document.body.classList.toggle("wide", wanted);
   if (!wanted) { trKey = ""; trSpans = []; return; }

@@ -1,7 +1,7 @@
 // Runs uploads so they survive the popup closing (it closes whenever it loses focus).
 // Flow: POST /v1/listen?paragraphs=true (plain Deepgram, fast) -> show transcript -> then
 // POST /v1/translate one timed sentence at a time, publishing each translation as it lands.
-import { BUILD, getAudio, setState, JobState, Sentence, TranslationState } from "./shared";
+import { BUILD, clearAudio, getAudio, setState, JobState, Sentence, TranslationState } from "./shared";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false }).catch(() => {});
@@ -15,6 +15,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     // Translate the finished transcript (Translate ticked, or target changed, after the file was dropped).
     void retranslate(msg.base as string, msg.language as string, msg.translateTo as string);
     reply({ ok: true, build: BUILD });
+  }
+  else if (msg?.type === "clear") {
+    // Clear button: cancel any running upload/translation loop, drop the stored audio and job.
+    generation++; clearInterval(keepAlive);
+    void clearAudio().catch(() => {}).then(() => setState({ phase: "idle" })).then(() => reply({ ok: true, build: BUILD }));
+    return true;
   }
   return false;
 });

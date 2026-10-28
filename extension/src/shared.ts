@@ -68,6 +68,13 @@ export async function getAudio(): Promise<{ blob: Blob; name: string } | undefin
   });
 }
 
+export async function clearAudio(): Promise<void> {
+  const d = await db();
+  await new Promise<void>((res, rej) => {
+    const tx = d.transaction(STORE, "readwrite"); tx.objectStore(STORE).delete("last");
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
 export const getState = async (): Promise<JobState> =>
   ((await chrome.storage.session.get("job")).job as JobState) ?? { phase: "idle" };
 export const setState = (job: JobState) => chrome.storage.session.set({ job });
