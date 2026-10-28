@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Parakeet ASR</title><link rel="stylesheet" href="app.css"></head>
+<body>
+<header>
+  <label>Server <input id="server" type="url" spellcheck="false"></label>
+  <label>Language <select id="lang"></select></label>
+</header>
+<label id="drop" tabindex="0">
+  <input id="file" type="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.webm,audio/*" hidden>
+  <div id="dropText"><strong>Drop audio here</strong><br>or click to choose<br><small>wav · mp3 · flac · ogg · m4a · webm</small></div>
+</label>
+<div id="status"></div>
+<div id="error" hidden></div>
+<div id="meta"></div>
+<div id="out"></div>
+<footer><button id="copy" disabled>Copy</button><button id="dl" disabled>Download .txt</button></footer>
+<script src="app.js"></script>
+</body></html>
