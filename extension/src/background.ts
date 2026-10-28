@@ -11,6 +11,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === "transcribe") {
     void run(msg.url as string, msg.mime as string, msg.base as string, msg.language as string, msg.translateTo as string | undefined);
     reply({ ok: true, build: BUILD });
+  } else if (msg?.type === "translate") {
+    // Translate the finished transcript (Translate ticked, or target changed, after the file was dropped).
+    void retranslate(msg.base as string, msg.language as string, msg.translateTo as string);
+    reply({ ok: true, build: BUILD });
   }
   return false;
 });
@@ -76,6 +80,23 @@ async function run(url: string, mime: string, base: string, language: string, tr
     }
   } catch (e) {
     await setState({ ...job, phase: "error", finishedAt: Date.now(), error: `Extension error: ${(e as Error).message}` });
+  } finally { if (gen === generation) clearInterval(keepAlive); }
+}
+
+async function retranslate(base: string, language: string, target: string) {
+  const job = (await chrome.storage.session.get("job")).job as JobState | undefined;
+  if (!job || job.phase !== "done") return;
+  const gen = ++generation;
+  const withTarget: JobState = { ...job, translateTo: target, tr: undefined };
+  clearInterval(keepAlive);
+  keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
+  try {
+    if (job.sentences?.length) await translateAll(withTarget, base, language, target, gen);
+    else await setState({ ...withTarget, tr: { target, status: "error", done: 0, total: 0, items: [], startedAt: Date.now(),
+      finishedAt: Date.now(), error: "no sentences in the transcript to translate" } });
+  } catch (e) {
+    await setState({ ...withTarget, tr: { target, status: "error", done: 0, total: 0, items: [], startedAt: Date.now(),
+      finishedAt: Date.now(), error: `Extension error: ${(e as Error).message}` } });
   } finally { if (gen === generation) clearInterval(keepAlive); }
 }
 

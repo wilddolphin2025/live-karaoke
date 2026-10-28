@@ -75,3 +75,12 @@ export async function getAudio(): Promise<{ blob: Blob; name: string } | undefin
 export const getState = async (): Promise<JobState> =>
   ((await chrome.storage.session.get("job")).job as JobState) ?? { phase: "idle" };
 export const setState = (job: JobState) => chrome.storage.session.set({ job });
+
+// Root cause of "no translation" (0.5.1): translation was decided only at drop time, so ticking Translate
+// after the transcript (or reopening the popup with it ticked) did nothing. Now a finished transcript is
+// translated whenever Translate is on and it has no translation to the selected language yet.
+export function needsTranslation(job: JobState, checked: boolean, target: string): boolean {
+  if (!checked || job.phase !== "done") return false;
+  if (!job.tr) return true;
+  return job.tr.target !== target || job.tr.status === "error" && !!job.sentences?.length;
+}

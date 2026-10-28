@@ -1,4 +1,4 @@
-import { BUILD, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, getAudio, getState, putAudio } from "./shared";
+import { BUILD, needsTranslation, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, getAudio, getState, putAudio } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
@@ -31,8 +31,20 @@ const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "a
   server.value = s.server as string; lang.value = s.language as string;
   trBox.checked = s.translate as boolean; trLang.value = s.translateTo as string; trLang.disabled = !trBox.checked;
 });
-trBox.addEventListener("change", () => { trLang.disabled = !trBox.checked; chrome.storage.local.set({ translate: trBox.checked }); });
-trLang.addEventListener("change", () => chrome.storage.local.set({ translateTo: trLang.value }));
+trBox.addEventListener("change", () => { trLang.disabled = !trBox.checked; chrome.storage.local.set({ translate: trBox.checked }); void maybeTranslate(); });
+trLang.addEventListener("change", () => { chrome.storage.local.set({ translateTo: trLang.value }); void maybeTranslate(); });
+
+let lastAsk = "";
+async function maybeTranslate() {
+  renderTranslation(lastJob);
+  if (!needsTranslation(lastJob, trBox.checked, trLang.value)) return;
+  const ask = `${lastJob.requestId}:${trLang.value}:${lastJob.tr?.status ?? ""}`;
+  if (ask === lastAsk) return;  // one request per state, no loops on persistent errors
+  lastAsk = ask;
+  const reply = await chrome.runtime.sendMessage({ type: "translate", base: baseUrl(), language: lang.value, translateTo: trLang.value })
+    .catch((e) => ({ err: String(e) }));
+  if (reply?.build !== BUILD) showError(`Background worker is ${reply?.build ? `build ${reply.build}` : "an older build"}, this page is ${BUILD}: open chrome://extensions and press Reload on Parakeet ASR.`);
+}
 server.addEventListener("change", () => { chrome.storage.local.set({ server: baseUrl() }); void loadVersions(); });
 lang.addEventListener("change", () => chrome.storage.local.set({ language: lang.value }));
 
@@ -113,6 +125,7 @@ async function render(job: JobState) {
   const took = job.startedAt && job.finishedAt ? ` in ${((job.finishedAt - job.startedAt) / 1000).toFixed(1)}s` : "";
   statusEl.textContent = job.phase === "done" ? `Done${took}: ${job.fileName}` : job.phase === "error" ? `Failed${took}` : "";
   if (job.phase !== "done") { renderTranslation(job); return; }
+  void maybeTranslate();
   renderTranslation(job);  // progressive: runs on every state update
   const key = `${job.requestId}`;
   if (key === renderedKey) return;
@@ -175,16 +188,18 @@ function trStatusText(tr: TranslationState): string {
 // Second pane: one block per timed source sentence, filled as translations arrive.
 function renderTranslation(job: JobState) {
   const tr = job.tr, sents = job.sentences ?? [];
-  const wanted = job.phase === "running" || !tr ? !!job.translateTo : true;
+  const wanted = trBox.checked || (job.phase === "running" || !tr ? !!job.translateTo : true);
   trPane.hidden = !wanted;
   if (!wanted) { trKey = ""; trSpans = []; return; }
   if (job.phase === "running" || !tr) {
     trOut.textContent = ""; trSpans = []; trKey = "";
-    trStatus.textContent = job.phase === "running" ? `Translation to ${trName(job.translateTo!)} starts after the transcript.`
+    const target = job.translateTo ?? trLang.value;
+    trStatus.textContent = job.phase === "idle" ? `Translation to ${trName(target)} is on: drop a file.`
+      : job.phase === "running" ? `Translation to ${trName(target)} starts after the transcript.`
       : job.phase === "done" && Date.now() - (job.finishedAt ?? 0) < 4000 ? "Starting translation…"
       : job.phase === "done" ? `Translation did not start. ${staleWorker || "Reload the extension in chrome://extensions and try again."}`
       : "Translation skipped: transcription failed.";
-    trStatus.classList.toggle("err", job.phase !== "running" && !trStatus.textContent!.startsWith("Starting"));
+    trStatus.classList.toggle("err", job.phase !== "running" && job.phase !== "idle" && !trStatus.textContent!.startsWith("Starting"));
     if (job.phase === "done") setTimeout(() => { if (lastJob === job) renderTranslation(job); }, 4500);  // watchdog
     return;
   }
