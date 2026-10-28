@@ -21,6 +21,7 @@ class GpuOutOfMemory(Exception):
 @dataclass
 class _Job:
     audio: np.ndarray
+    language: str = "auto"
     future: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
 
 
@@ -40,8 +41,8 @@ class GpuWorker:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
 
-    async def submit(self, audio: np.ndarray) -> list[Segment]:
-        job = _Job(audio)
+    async def submit(self, audio: np.ndarray, language: str = "auto") -> list[Segment]:
+        job = _Job(audio, language)
         try:
             self.queue.put_nowait(job)  # backpressure: fail fast, do not pile up
         except asyncio.QueueFull:
@@ -55,7 +56,7 @@ class GpuWorker:
                 if job.future.cancelled():  # client gave up while waiting
                     continue
                 # The blocking CUDA call runs in a thread; the loop stays free.
-                segments = await asyncio.to_thread(self.engine.transcribe, job.audio)
+                segments = await asyncio.to_thread(self.engine.transcribe, job.audio, job.language)
                 if not job.future.cancelled():
                     job.future.set_result(segments)
             except torch.OutOfMemoryError:

@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 SAMPLE_RATE = 16_000
-MODEL_NAME = "nvidia/parakeet-tdt-0.6b-v3"
+MODEL_NAME = os.environ.get("ASR_MODEL", "nvidia/nemotron-labs-unified-asr-0.6b")
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,7 @@ class ParakeetEngine:
         import nemo.collections.asr as nemo_asr  # heavy import, deferred
 
         self.chunk_seconds = chunk_seconds
+        self.model_name = model_name
         self.model = (
             nemo_asr.models.ASRModel.from_pretrained(model_name, map_location="cpu")
             .eval()
@@ -50,13 +51,22 @@ class ParakeetEngine:
             .cuda()
         )
 
+    @property
+    def supports_language(self) -> bool:
+        return "Prompt" in type(self.model).__name__
+
     @torch.inference_mode()
-    def transcribe(self, audio: np.ndarray) -> list[Segment]:
-        """Transcribe 16 kHz mono float32 audio, chunked to fit 4 GB VRAM."""
+    def transcribe(self, audio: np.ndarray, language: str = "auto") -> list[Segment]:
+        """Transcribe 16 kHz mono float32 audio, chunked to fit 4 GB VRAM.
+
+        language: ISO code ("en", "ru", ...) or "auto". Only prompt-conditioned
+        models (e.g. nemotron-labs-unified) use it; others ignore it.
+        """
         step = self.chunk_seconds * SAMPLE_RATE
         chunks = [audio[i : i + step] for i in range(0, len(audio), step)]
         # NeMo accepts numpy arrays directly: no temp files needed.
-        results = self.model.transcribe(chunks, batch_size=1, verbose=False)
+        kwargs = {"target_lang": language} if self.supports_language else {}
+        results = self.model.transcribe(chunks, batch_size=1, verbose=False, **kwargs)
         return [
             Segment(
                 start=i * self.chunk_seconds,

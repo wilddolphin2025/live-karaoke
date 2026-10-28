@@ -11,7 +11,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from asr.engine import MODEL_NAME, SAMPLE_RATE, ParakeetEngine, to_mono_16k
+from asr.engine import SAMPLE_RATE, ParakeetEngine, to_mono_16k
 from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse,
                          Metadata, Results, Utterance)
 from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
@@ -91,6 +91,8 @@ async def listen(
     request: Request,
     utterances: bool = Query(False, description="Return timed segments"),
     model: str = Query("parakeet", description="Accepted for Deepgram compatibility"),
+    language: str = Query("auto", pattern="^(auto|bg|cs|da|de|el|en|es|et|fi|fr|hr|hu|it|lt|lv|mt|nl|pl|pt|ro|ru|sk|sl|sv|uk)$",
+                          description="ISO 639-1 code of the speech, or auto"),
 ):
     body = await request.body()
     if not body:
@@ -105,7 +107,7 @@ async def listen(
     audio = await asyncio.to_thread(to_mono_16k, audio, sr)
 
     try:
-        segments = await asyncio.wait_for(request.app.state.worker.submit(audio), TIMEOUT_S)
+        segments = await asyncio.wait_for(request.app.state.worker.submit(audio, language), TIMEOUT_S)
     except QueueFull:
         raise ApiError(503, "SERVER_BUSY", "Too many pending requests, retry later.") from None
     except GpuOutOfMemory:
@@ -117,7 +119,7 @@ async def listen(
     return ListenResponse(
         metadata=Metadata(request_id=request.state.request_id,
                           duration=round(len(audio) / SAMPLE_RATE, 3),
-                          models=[MODEL_NAME]),
+                          models=[request.app.state.worker.engine.model_name]),
         results=Results(
             channels=[Channel(alternatives=[Alternative(transcript=transcript)])],
             utterances=[Utterance(start=s.start, end=s.end, transcript=s.text)
