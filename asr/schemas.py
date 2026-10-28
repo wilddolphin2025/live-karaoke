@@ -39,6 +39,7 @@ class Alternative(BaseModel):
 
 class Channel(BaseModel):
     alternatives: list[Alternative]
+    detected_language: str | None = None  # Deepgram field; set when language=auto (text-based guess)
 
 
 class Utterance(BaseModel):

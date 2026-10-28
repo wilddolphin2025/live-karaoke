@@ -69,6 +69,7 @@ async function run(url: string, mime: string, base: string, language: string, tr
     if (!sentences.length) sentences = utterances.map((u: any) => ({ text: u.transcript, start: u.start, end: u.end }));
     sentences = sentences.filter((s) => s.text?.trim());
     const done: JobState = { ...job, phase: "done", finishedAt, servedBy,
+      detectedLanguage: data?.results?.channels?.[0]?.detected_language ?? undefined,
       transcript: alt.transcript ?? "", words: alt.words ?? [], utterances, sentences,
       model: Array.isArray(models) ? models.join(", ") : models, duration: data?.metadata?.duration,
       requestId: data?.metadata?.request_id };
@@ -102,6 +103,9 @@ async function retranslate(base: string, language: string, target: string) {
 
 async function translateAll(job: JobState, base: string, language: string, target: string, gen: number) {
   const sentences = job.sentences!;
+  // Spoken language for the translator: the picked one, else the server's guess for the whole transcript
+  // (per-sentence guesses are unreliable on short lines, and 'auto' makes the model echo more often).
+  const source = language === "auto" ? job.detectedLanguage ?? "auto" : language;
   const tr: TranslationState = { target, status: "warming", done: 0, total: sentences.length,
     items: sentences.map(() => null), startedAt: Date.now() };
   const publish = async () => { if (gen === generation) await setState({ ...job, tr: { ...tr, items: [...tr.items] } }); };
@@ -111,7 +115,7 @@ async function translateAll(job: JobState, base: string, language: string, targe
       let r: Response;
       try {
         r = await fetch(`${base}/v1/translate`, { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ target, source: language, sentences: batch }) });
+          body: JSON.stringify({ target, source, sentences: batch }) });
       } catch (e) {
         if (attempt >= 4) throw new Error(`could not reach the server (${(e as Error).message})`);
         await sleep(3000); continue;  // e.g. the pod we hit was just scaled away

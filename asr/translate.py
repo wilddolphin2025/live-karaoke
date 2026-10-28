@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import ssl
 import time
 from datetime import datetime, timezone
@@ -70,7 +71,7 @@ def parse_targets(raw: str) -> list[str]:
     return out
 
 
-def build_prompt(text: str, target: str, source: str | None = None) -> str:
+def build_prompt(text: str, target: str, source: str | None = None, strict: bool = False) -> str:
     """Raw prompt identical to the model's chat template output (add_generation_prompt=True).
 
     With a known source we get the specific system message; for auto we use the
@@ -80,7 +81,92 @@ def build_prompt(text: str, target: str, source: str | None = None) -> str:
     system = (f"You are an expert at translating text from {src} to {tgt}." if src
               else "You are a translation expert.")
     user = f"What is the {tgt} translation of the sentence: {text.strip()}"
+    if strict:  # retry after an echo: insist on the target language, every word translated
+        system += f" Always answer in {tgt} only, translating every word; never repeat the original text."
     return f"<s>System\n{system}</s>\n<s>User\n{user}</s>\n<s>Assistant\n"
+
+
+# --------------------------------------------------------------------------- source detection
+# The ASR model does not report a language, and "auto" makes Riva-Translate use its generic prompt,
+# where it often echoes the source back (seen with Spanish lyrics). Guess the source from the text:
+# script first, then function-word counts for Latin-script languages. Cheap, and good enough to
+# pick the system prompt; callers that know the language pass it explicitly.
+_STOP = {
+    "en": "the and of to is in that it you for was with on are this be have not but they",
+    "es": "el la de que y en los se del las por un una con no es lo me para su al como más pero",
+    "fr": "le la les de des et est un une du que qui dans pas pour sur au avec ce il je ne vous",
+    "de": "der die das und ist nicht ich ein eine zu den mit von sich auf für dem es im auch",
+    "it": "il di che e la per un una non è sono del della gli le si con mi ma come anche",
+    "pt": "o a os de que e do da em um uma não para com se por mais as dos das ao foi",
+    "nl": "de het een en van is niet dat ik je op te zijn met voor er die maar",
+    "pl": "i w nie się na że z do to jest jak co ale o po tak jestem",
+    "cs": "a je se v na že to s z do jsem jak ale o by není",
+    "sv": "och att det är en som på för av med jag inte har till den",
+    "ro": "și de la în nu cu că pe o un este se ce mai din",
+    "tr": "ve bir bu da de için ne ile çok ama gibi daha",
+}
+_STOPSETS = {k: set(v.split()) for k, v in _STOP.items()}
+
+
+def detect_language(text: str) -> str | None:
+    """Best-effort ISO code of `text`, or None when unsure."""
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return None
+    def frac(lo, hi):
+        return sum(lo <= ord(c) <= hi for c in letters) / len(letters)
+    if frac(0x0400, 0x04FF) > 0.5:
+        t = text.lower()
+        if any(c in t for c in "іїєґ"):
+            return "uk"
+        if any(c in t for c in "ъ") and not any(c in t for c in "ыэё"):
+            return "bg"
+        return "ru"
+    for lo, hi, code in ((0x0370, 0x03FF, "el"), (0x0600, 0x06FF, "ar"), (0x0900, 0x097F, "hi"),
+                         (0x0E00, 0x0E7F, "th"), (0x3040, 0x30FF, "ja"), (0xAC00, 0xD7AF, "ko"),
+                         (0x4E00, 0x9FFF, "zh")):
+        if frac(lo, hi) > 0.3:
+            return code
+    words = [w.strip(".,;:!?¡¿\"'«»()…-").lower() for w in text.split()]
+    scores = {k: sum(w in s for w in words) for k, s in _STOPSETS.items()}
+    best = max(scores, key=scores.get)
+    ranked = sorted(scores.values(), reverse=True)
+    if ranked[0] == 0 or (len(words) >= 4 and ranked[0] == ranked[1]):
+        return None
+    return best
+
+
+_SCRIPT = {"ru": (0x0400, 0x04FF), "uk": (0x0400, 0x04FF), "bg": (0x0400, 0x04FF), "el": (0x0370, 0x03FF),
+           "ar": (0x0600, 0x06FF), "hi": (0x0900, 0x097F), "th": (0x0E00, 0x0E7F), "ko": (0xAC00, 0xD7AF),
+           "ja": (0x3040, 0x9FFF), "zh": (0x4E00, 0x9FFF), "zh-cn": (0x4E00, 0x9FFF), "zh-tw": (0x4E00, 0x9FFF)}
+
+
+def looks_untranslated(src: str, out: str, target: str, source: str | None = None) -> bool:
+    """The model echoed the input (or answered in the wrong script) instead of translating."""
+    import difflib
+    a, b = src.strip().lower(), out.strip().lower()
+    if not b:
+        return True
+    if target in _SCRIPT:
+        lo, hi = _SCRIPT[target]
+        letters = [c for c in b if c.isalpha()]
+        if letters and sum(lo <= ord(c) <= hi for c in letters) / len(letters) < 0.8:  # names may stay Latin; whole clauses may not
+            return True
+    if source and source == target:
+        return False
+    return len(a) > 12 and difflib.SequenceMatcher(None, a, b).ratio() > 0.8
+
+
+def split_clauses(text: str, max_words: int = 14) -> list[str]:
+    """Comma-separated chunks of at most ~max_words, for retrying sentences the model will not translate."""
+    parts, cur = [], []
+    for piece in re.split(r"(?<=[,;:])\s+", text.strip()):
+        if cur and len(" ".join(cur + [piece]).split()) > max_words:
+            parts.append(" ".join(cur)); cur = []
+        cur.append(piece)
+    if cur:
+        parts.append(" ".join(cur))
+    return parts
 
 
 class TranslatorUnavailable(Exception):
@@ -106,9 +192,34 @@ class TranslatorClient:
             return False
 
     async def translate(self, text: str, target: str, source: str | None = None) -> str:
+        """Translate one sentence; guess the source if unknown, and retry echoes clause by clause."""
         if not text.strip():
             return ""
-        body = {"prompt": build_prompt(text, target, source), "temperature": 0,
+        source = source or detect_language(text)
+        if source == target:
+            return text.strip()
+        out = await self._complete(text, target, source)
+        if not looks_untranslated(text, out, target, source):
+            return out
+        # 1) same sentence, stricter prompt
+        out2 = await self._complete(text, target, source, strict=True)
+        if not looks_untranslated(text, out2, target, source):
+            return out2
+        # 2) clause by clause (long lyric lines with repeats are what the model gives up on)
+        parts = split_clauses(text)
+        if len(parts) > 1:
+            outs = []
+            for p in parts:
+                o = await self._complete(p, target, source)
+                if looks_untranslated(p, o, target, source):
+                    o = await self._complete(p, target, source, strict=True)
+                outs.append(o.strip().rstrip(".,;:"))
+            return ", ".join(outs) + ("." if text.rstrip().endswith(".") else "")
+        log.info("untranslated output kept for %r -> %s", text[:60], target)
+        return out2
+
+    async def _complete(self, text: str, target: str, source: str | None, strict: bool = False) -> str:
+        body = {"prompt": build_prompt(text, target, source, strict), "temperature": 0,
                 "n_predict": max(64, 4 * len(text)), "stop": ["</s>", "<s>"], "cache_prompt": True}
         async with self._lock:
             try:

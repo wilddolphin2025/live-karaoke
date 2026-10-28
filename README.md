@@ -65,3 +65,8 @@ and resets to `asr` mode. The translator's initContainer downloads the 2.8 GB GG
 
 ## Tests
 `pytest -m "not accuracy"`; `tests/test_translate.py` also has a live ru→en test (`ASR_URL=...`, marked `accuracy`).
+
+### Translation quality notes (service 0.5.1)
+- With `language=auto` the server guesses the spoken language from the transcript (script + function words) and returns it as Deepgram `results.channels[0].detected_language`; the extension passes it as `source` to `/v1/translate` (and `/v1/translate` guesses too when `source` is `auto`). Riva-Translate echoed Spanish back far more often with the generic "auto" prompt.
+- Echo detection: output that is ≥80 % similar to the input, or not mostly in the target script, is retried with a stricter prompt and then clause by clause.
+- Sentences break on terminal punctuation; a pause splits only if > 3 s and the sentence already has ≥ 8 words; run-ons break at 40 words, at the last comma when there is one.

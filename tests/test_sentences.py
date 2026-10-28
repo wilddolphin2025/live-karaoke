@@ -20,9 +20,34 @@ def test_split_on_punctuation_with_word_times():
 
 
 def test_split_on_long_pause_and_max_words():
-    words = tuple(W(f"w{i}", i * 0.3, i * 0.3 + 0.2) for i in range(45)) + (W("late", 30.0, 30.5),)
+    words = tuple(W(f"w{i}", i * 0.3, i * 0.3 + 0.2) for i in range(50)) + (W("late", 30.0, 30.5),)
     got = sentences([Segment(0, 31, "", words)])
-    assert len(got[0].text.split()) == 40 and got[-1].text == "late" and got[-1].start == 30.0
+    assert [len(s.text.split()) for s in got] == [40, 10, 1] and got[-1].text == "late" and got[-1].start == 30.0
+
+
+def test_short_pause_or_short_fragment_does_not_split():
+    # 2 s gap mid-clause, and a 4 s gap after only 3 words: both stay in one sentence
+    ws = [W("cuando", 0, .4), W("bailo", 2.4, 2.8), W("el", 2.9, 3), W("chacha", 7.2, 7.6), W("contigo.", 7.7, 8)]
+    assert [s.text for s in sentences([Segment(0, 8, "", tuple(ws))])] == ["cuando bailo el chacha contigo."]
+
+
+def test_max_words_breaks_at_last_comma():
+    ws = [W(f"a{i}" + ("," if i == 29 else ""), i * .3, i * .3 + .2) for i in range(45)]
+    got = sentences([Segment(0, 14, "", tuple(ws))])
+    assert got[0].text.endswith("a29,") and len(got[0].text.split()) == 30 and got[1].text.startswith("a30")
+
+
+def test_detect_language_and_echo():
+    from asr.translate import detect_language, looks_untranslated, split_clauses
+    assert detect_language("Aunque me muera de dolor, porque dicen que anoche lo vieron") == "es"
+    assert detect_language("В Древнем Китае использовали способ") == "ru"
+    assert detect_language("The cat is on the table and it is happy") == "en"
+    assert detect_language("12 34") is None
+    assert looks_untranslated("Aunque me muera de dolor", "Aunque me muera de dolor", "ru")
+    assert looks_untranslated("Hola amigo mío", "Hola amigo", "ru")          # wrong script
+    assert not looks_untranslated("Hola amigo mío", "Привет, мой друг", "ru")
+    assert looks_untranslated("Aunque me muera de dolor hoy", "Aunque me muera de dolor hoy.", "en")
+    assert split_clauses("uno dos, tres cuatro, cinco", max_words=2) == ["uno dos,", "tres cuatro,", "cinco"]
 
 
 def test_text_fallback_interpolates_times():

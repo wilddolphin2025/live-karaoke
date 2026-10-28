@@ -14,8 +14,10 @@ from asr.engine import Segment
 
 _END = re.compile(r"[.!?…。！？]+[\"'»”)\]]*$")
 _SPLIT = re.compile(r"(?<=[.!?…。！？])[\"'»”)\]]*\s+")
-MAX_WORDS = 40      # force a break in run-on text (no punctuation)
-PAUSE_S = 1.5       # ...or at a long pause
+MAX_WORDS = 40      # force a break in run-on text (no terminal punctuation), at the last comma if any
+PAUSE_S = 3.0       # ...or at a long pause, but only once the sentence is already MIN_PAUSE_WORDS long
+MIN_PAUSE_WORDS = 8  # (short pauses mid-clause, e.g. "Northern Arizona, | located in Flagstaff", stay together)
+_COMMA = re.compile(r"[,;:—–]$")
 
 
 @dataclass(frozen=True)
@@ -35,8 +37,17 @@ def from_words(words) -> list[Sentence]:
             cur.clear()
 
     for w in words:
-        if cur and (w.start - cur[-1].end > PAUSE_S or len(cur) >= MAX_WORDS):
+        if cur and w.start - cur[-1].end > PAUSE_S and len(cur) >= MIN_PAUSE_WORDS:
             flush()
+        elif len(cur) >= MAX_WORDS:
+            cut = max((i for i, x in enumerate(cur[:-1]) if _COMMA.search(x.word)), default=None)
+            if cut is None or cut < MAX_WORDS // 4:
+                flush()
+            else:  # break after the last comma, carry the rest into the next sentence
+                rest = cur[cut + 1:]
+                del cur[cut + 1:]
+                flush()
+                cur.extend(rest)
         cur.append(w)
         if _END.search(w.word):
             flush()

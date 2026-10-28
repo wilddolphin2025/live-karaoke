@@ -39,6 +39,7 @@ export interface JobState {
   note?: string;          // e.g. translator warming up, retry n
   words?: Word[];
   utterances?: Utterance[];
+  detectedLanguage?: string;  // server's guess when language=auto (Deepgram detected_language)
   sentences?: Sentence[];   // timed source sentences (Deepgram paragraphs)
   tr?: TranslationState;    // progressive translation of `sentences`
   model?: string;

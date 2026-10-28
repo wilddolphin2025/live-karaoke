@@ -19,10 +19,10 @@ from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse, Me
 from asr.sentences import sentences as split_sentences
 from asr.translate import (LANGUAGES, ModeController, TranslatorClient,
                            TranslatorUnavailable, UnsupportedLanguage, normalize_lang,
-                           parse_targets)
+                           detect_language, parse_targets)
 from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 GIT_SHA = os.environ.get("GIT_SHA", "unknown")
 HOSTNAME = os.environ.get("HOSTNAME", "unknown")
 MAX_BYTES = 200 * 1024 * 1024
@@ -183,6 +183,8 @@ async def translate_sentences(request: Request, body: TranslateRequest):
             raise UnsupportedLanguage(body.target)
         target = target[0]
         source = None if body.source in (None, "", "auto") else normalize_lang(body.source)
+        if source is None:  # guess once from all sentences in the request (more text, better guess)
+            source = detect_language(" ".join(s.text for s in body.sentences))
     except UnsupportedLanguage as e:
         raise ApiError(400, "Bad Request", f"Unsupported language: {e}. "
                        f"Supported: {', '.join(sorted(LANGUAGES))}") from None
@@ -240,7 +242,7 @@ async def listen(
     transcript = " ".join(s.text.strip() for s in segments if s.text.strip())
     seg_tr: dict[str, list[str]] = {}
     if targets:
-        source = language if language != "auto" else None
+        source = language if language != "auto" else detect_language(transcript)
         try:
             seg_tr = await _translate_segments(request.app.state.translator,
                                                [s.text for s in segments], targets, source)
@@ -252,7 +254,8 @@ async def listen(
                           models=[request.app.state.worker.engine.model_name]
                           + ([request.app.state.translator.model] if targets else [])),
         results=Results(
-            channels=[Channel(alternatives=[Alternative(
+            channels=[Channel(detected_language=detect_language(transcript) if language == "auto" else None,
+                              alternatives=[Alternative(
                 transcript=transcript,
                 words=[{"word": w.word, "start": w.start, "end": w.end,
                         "confidence": w.confidence, "punctuated_word": w.word}
