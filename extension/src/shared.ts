@@ -166,3 +166,17 @@ export function wordAt(spans: { start: number; end: number }[], t: number, lead 
   if (i >= 0 && t > spans[i].end + pause) i = -1;
   return i;
 }
+
+/** What toggling "Remove vocals" does right now (0.6.2):
+ *  off: a running job is cancelled (DELETE) and the player goes back to the original; a finished job is kept
+ *       (hidden, deleted by the server TTL or ✕) so turning it on again swaps back instantly.
+ *  on:  a finished job -> karaoke media; a running one -> keep waiting; none (or failed) -> start one for this file. */
+export type SepToggle = "none" | "original" | "cancel" | "karaoke" | "start" | "wait";
+export function sepToggleAction(checked: boolean, job: JobState): SepToggle {
+  if (job.phase !== "done") return "none";
+  const s = job.sep, busy = !!s && s.status !== "done" && s.status !== "error";
+  if (!checked) return busy || (!s && job.separate) ? "cancel" : "original";
+  if (s?.status === "done") return "karaoke";
+  if (busy || (!s && job.separate)) return "wait";
+  return "start";
+}

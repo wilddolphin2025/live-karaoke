@@ -93,3 +93,11 @@ singer's words (ASR on the vocals stem), **0.25 s ahead** of each word so you ca
 marked and kept centred. **🎤 Original** switches back (and **🎶 Instrumental** again); **⬇ Download** saves the file. Ticking it after a transcript removes the vocals of that file. **✕ Clear** cancels
 polling and sends `DELETE /v1/jobs/<id>`, which deletes the job on the server. The chip shows "· no vocals" when on.
 Needs service 0.7.0 (older servers: "server predates /v1/separate").
+
+### Turning Remove vocals on/off (0.6.2)
+
+The Settings checkbox takes effect immediately for the loaded file:
+
+- **Unticked** → the original media (kept in IndexedDB) is put back at the same position and play state, normal highlighting returns and the karaoke row is hidden. A finished job is kept (re-ticking swaps back instantly; the server TTL or ✕ deletes it); a running job is cancelled (`DELETE /v1/jobs/{id}`).
+- **Ticked** → if a finished job exists for this file the karaoke media replaces the player; otherwise a separation is started.
+- This survives closing/reopening the popup. If you untick during transcription, no separation starts.

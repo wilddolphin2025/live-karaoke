@@ -1,4 +1,4 @@
-import { BUILD, needsTranslation, needsSeparation, sepStatusText, wordAt, KARAOKE_LEAD_S, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
+import { BUILD, needsTranslation, needsSeparation, sepStatusText, sepToggleAction, wordAt, KARAOKE_LEAD_S, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
@@ -61,7 +61,20 @@ async function maybeTranslate() {
 server.addEventListener("change", () => { chrome.storage.local.set({ server: baseUrl() }); void loadVersions(); });
 lang.addEventListener("change", () => chrome.storage.local.set({ language: lang.value }));
 // "Remove vocals": strictly opt-in. Ticking it after a transcript removes the vocals of that file.
-sepBox.addEventListener("change", () => { chrome.storage.local.set({ separate: sepBox.checked }); updateSummary(); renderSep(lastJob); void maybeSeparate(); });
+// Toggling takes effect immediately on the loaded file (0.6.2).
+sepBox.addEventListener("change", async () => {
+  chrome.storage.local.set({ separate: sepBox.checked }); updateSummary();
+  const act = sepToggleAction(sepBox.checked, lastJob);
+  if (act === "cancel") {   // running job: stop polling + DELETE on the server; the worker drops sep from the state
+    await chrome.runtime.sendMessage({ type: "cancelSeparate" }).catch(() => null);
+    lastSepAsk = "";
+  }
+  if (act === "cancel" || act === "original") await switchTo("orig");
+  if (act === "karaoke") { autoSwitched = lastJob.sep?.jobId ?? ""; await switchTo("inst"); }
+  if (act === "start") { lastSepAsk = ""; if (lastJob.sep?.status === "error") await chrome.runtime.sendMessage({ type: "cancelSeparate" }).catch(() => null);
+    else void maybeSeparate(); }
+  renderSep(lastJob);
+});
 let lastSepAsk = "";
 async function maybeSeparate() {
   if (!needsSeparation(lastJob, sepBox.checked)) return;
@@ -73,7 +86,7 @@ async function maybeSeparate() {
 function renderSep(job: JobState) {
   const s = job.sep;
   const pending = !s && sepBox.checked && (job.phase === "running" || (job.phase === "done" && job.separate === true));
-  sepBar.hidden = !s && !pending;
+  sepBar.hidden = (!s && !pending) || (!!s && !sepBox.checked);  // unticked: karaoke controls hidden
   if (!s) { sepMode.hidden = sepDl.hidden = true; if (pending) sepStatus.textContent = "Vocals will be removed after the transcript" + (job.translateTo ? " and translation." : "."); return; }
   const busy = s.status !== "done" && s.status !== "error";
   sepStatus.innerHTML = (busy ? '<span class="spin"></span>' : "") + escapeHtml(sepStatusText(s));
@@ -83,23 +96,25 @@ function renderSep(job: JobState) {
   if (ready) { sepDl.href = s.downloadUrl!; sepDl.title = `Download the ${s.isVideo ? "video without the lead voice" : "instrumental"}`; }
   sepMode.hidden = !ready || !player || player.hidden;
   // Karaoke: when the job finishes, the instrumental/karaoke video replaces the media in the player.
-  if (ready && player && !player.hidden && audioUrl && autoSwitched !== s.jobId) { autoSwitched = s.jobId!; switchTo("inst"); }
+  if (ready && sepBox.checked && player && !player.hidden && audioUrl && autoSwitched !== s.jobId) { autoSwitched = s.jobId!; void switchTo("inst"); }
   sepMode.textContent = mode === "inst" ? "🎤 Original" : "🎶 Instrumental";
 }
 const escapeHtml = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 // Swap the player's media in place, keeping position and play/pause state.
-function switchTo(m: "orig" | "inst") {
+async function switchTo(m: "orig" | "inst") {
   const s = lastJob.sep;
-  if (!s?.downloadUrl || !player || m === mode) return;
+  if (!player || m === mode || (m === "inst" && !s?.downloadUrl)) return;
+  // The original is kept as a blob URL of the IndexedDB copy; recreate it if it was revoked/lost.
+  if (m === "orig" && !audioUrl) { const a = await getAudio(); if (!a) return; audioUrl = URL.createObjectURL(a.blob); audioKey = a.name; }
   const t = player.currentTime, playing = !player.paused;
   mode = m;
-  player.src = mode === "inst" ? s.downloadUrl : audioUrl!;
+  player.src = mode === "inst" ? s!.downloadUrl! : audioUrl!;
   player.addEventListener("loadedmetadata", () => { player!.currentTime = t; if (playing) void player!.play(); }, { once: true });
   document.body.classList.toggle("karaoke", mode === "inst");
   renderedKey = ""; cur = -1; curLine = null; renderTranscript(lastJob); renderSep(lastJob);
 }
 let autoSwitched = "";  // sep job id the player was switched to automatically (once; Original stays a manual choice)
-sepMode.addEventListener("click", () => switchTo(mode === "inst" ? "orig" : "inst"));
+sepMode.addEventListener("click", () => void switchTo(mode === "inst" ? "orig" : "inst"));
 
 // sidePanel.open needs a user gesture, so resolve the window id up front, not inside the click.
 let winId: number | undefined;
@@ -191,10 +206,8 @@ async function render(job: JobState) {
   drop.classList.toggle("busy", running);
   drop.classList.toggle("loaded", job.phase !== "idle");
   const jobKey = `${job.fileName ?? ""}:${job.startedAt ?? ""}`;
-  if (jobKey !== modeJob || job.sep?.status !== "done") {  // new file or no instrumental: back to the original
-    if (mode === "inst" && player && audioUrl) player.src = audioUrl;
-    mode = "orig"; modeJob = jobKey; document.body.classList.remove("karaoke");
-  }
+  if (jobKey !== modeJob) { mode = "orig"; modeJob = jobKey; document.body.classList.remove("karaoke"); }  // new file
+  else if (mode === "inst" && job.sep?.status !== "done") void switchTo("orig");  // job gone: original, same position
   errBox.hidden = job.phase !== "error";
   if (job.phase === "error") errBox.textContent = job.error ?? "Unknown error";
   if (job.fileName) { baseName = job.fileName.replace(/\.[^.]+$/, "") || "transcript"; await loadPlayer(job.fileName); if (lastJob !== job) return; }  // a newer state arrived while loading

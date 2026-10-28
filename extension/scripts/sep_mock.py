@@ -16,13 +16,14 @@ class H(BaseHTTPRequestHandler):
             return self._j(200, {"metadata": {"request_id": "r1", "duration": 5, "models": ["mock"]}, "results": {"channels": [{"alternatives": [{"transcript": " ".join(w["word"] for w in W), "words": W}]}],
                 "utterances": [{"start": 0, "end": 5, "transcript": " ".join(w["word"] for w in W)}]}})
         if self.path.startswith("/v1/separate"):
-            JOB.update(t0=time.time(), body=body, type=self.headers.get("content-type"), video=self.headers.get("content-type", "").startswith("video/"))
+            JOB.update(deleted=False, t0=time.time(), body=body, type=self.headers.get("content-type"), video=self.headers.get("content-type", "").startswith("video/"))
             return self._j(202, {"request_id": "r2", "job_id": "j1", "status": "queued", "status_url": "/v1/jobs/j1", "download_url": "/v1/jobs/j1/download"})
         self._j(404, {"err_code": "NOT_FOUND"})
     def do_GET(self):
+        if self.path == "/v1/jobs/j1" and JOB.get("deleted"): return self._j(404, {"err_code": "NOT_FOUND"})
         if self.path == "/v1/jobs/j1":
             dt = time.time() - JOB["t0"]
-            if dt < 3: return self._j(200, {"job_id": "j1", "status": "separating", "progress": dt / 4, "device": "cuda", "model": "htdemucs_ft"})
+            if dt < 6: return self._j(200, {"job_id": "j1", "status": "separating", "progress": dt / 7, "device": "cuda", "model": "htdemucs_ft"})
             return self._j(200, {"job_id": "j1", "status": "done", "progress": 1, "device": "cuda", "model": "htdemucs_ft", "is_video": JOB["video"],
                                  "download_url": "/v1/jobs/j1/download", "result": {"words": W[::2], "utterances": []}})
         if self.path == "/v1/jobs/j1/download":
@@ -35,5 +36,5 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         self._j(404, {"err_code": "NOT_FOUND"})
     def do_DELETE(self):
-        print(f"DELETE {self.path}", flush=True); self._j(200, {"deleted": True})
+        print(f"DELETE {self.path}", flush=True); JOB["deleted"] = True; self._j(200, {"deleted": True})
 ThreadingHTTPServer(("0.0.0.0", int(sys.argv[1]) if len(sys.argv) > 1 else 18998), H).serve_forever()

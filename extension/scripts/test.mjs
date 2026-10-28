@@ -49,3 +49,16 @@ test("karaoke lead is 0.2-0.3 s", () => assert.ok(KARAOKE_LEAD_S >= 0.2 && KARAO
 test("no lead: word at t", () => { assert.equal(wordAt(ws, 1.3), 0); assert.equal(wordAt(ws, 0.9), -1); });
 test("lead: next word lights up early", () => { assert.equal(wordAt(ws, 1.3, 0.25), 1); assert.equal(wordAt(ws, 0.8, 0.25), 0); });
 test("pause between words: nothing highlighted until the lead", () => { assert.equal(wordAt(ws, 3, 0.25), -1); assert.equal(wordAt(ws, 3.8, 0.25), 2); });
+
+// ---- 0.6.2 toggling Remove vocals on a loaded file
+const { sepToggleAction } = await import(out);
+const sepDone = { ...done, sep: { base: "", jobId: "j", status: "done", progress: 1, startedAt: 0, downloadUrl: "u" } };
+const sepRun = { ...done, sep: { base: "", jobId: "j", status: "separating", progress: 0.3, startedAt: 0 } };
+test("off with a finished job -> original (job kept)", () => assert.equal(sepToggleAction(false, sepDone), "original"));
+test("off while running -> cancel", () => assert.equal(sepToggleAction(false, sepRun), "cancel"));
+test("off before the worker started it -> cancel", () => assert.equal(sepToggleAction(false, { ...done, separate: true }), "cancel"));
+test("on with a finished job -> karaoke", () => assert.equal(sepToggleAction(true, sepDone), "karaoke"));
+test("on with none -> start", () => assert.equal(sepToggleAction(true, done), "start"));
+test("on after a failure -> start again", () => assert.equal(sepToggleAction(true, { ...done, sep: { ...sepRun.sep, status: "error" } }), "start"));
+test("on while running -> wait", () => assert.equal(sepToggleAction(true, sepRun), "wait"));
+test("no file -> nothing", () => assert.equal(sepToggleAction(true, { phase: "idle" }), "none"));

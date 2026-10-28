@@ -18,6 +18,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     void retranslate(msg.base as string, msg.language as string, msg.translateTo as string);
     reply({ ok: true, build: BUILD });
   }
+  else if (msg?.type === "cancelSeparate") {
+    // "Remove vocals" unticked while running (or a failed job before a retry): stop polling, delete the server job,
+    // drop it from the state. The transcript, translation and original audio stay.
+    sepGen++;
+    void getState().then(async (j) => {
+      const s = j.sep;
+      if (s?.jobId) await fetch(`${s.base}/v1/jobs/${s.jobId}`, { method: "DELETE" }).catch(() => {});
+      const { sep: _drop, separate: _s, ...rest } = j;
+      await setState(rest);
+    }).then(() => reply({ ok: true, build: BUILD }));
+    return true;
+  }
   else if (msg?.type === "separate") {
     // "Remove vocals" ticked after the transcript (or the drop predates the tick): start it now.
     void separate(msg.language as string);
@@ -100,7 +112,8 @@ async function run(url: string, mime: string, base: string, language: string, tr
     }
     // Post-processing, strictly on demand: only when "Remove vocals" was on at drop, and only now that
     // the transcript and translation have been delivered.
-    if (separateVocals && gen === generation) await separate(language, base);
+    // Re-check the setting: it may have been unticked while transcribing/translating (0.6.2).
+    if (separateVocals && gen === generation && (await chrome.storage.local.get({ separate: false })).separate === true) await separate(language, base);
   } catch (e) {
     await setState({ ...job, phase: "error", finishedAt: Date.now(), error: `Extension error: ${(e as Error).message}` });
   } finally { if (gen === generation) clearInterval(keepAlive); }
