@@ -19,6 +19,7 @@ spec:
       initContainers:
         - name: fetch-model   # one-time 2.5 GB download into the shared HF cache
           image: curlimages/curl:8.10.1
+          imagePullPolicy: IfNotPresent
           securityContext: {runAsUser: 1000, runAsGroup: 1000}
           command: [sh, -c, 'test -s /models/gguf/$(GGUF) || (mkdir -p /models/gguf && curl -fL -o /models/gguf/$(GGUF).part $(GGUF_URL) && mv /models/gguf/$(GGUF).part /models/gguf/$(GGUF))']
           env:
@@ -27,7 +28,9 @@ spec:
           volumeMounts: [{name: models, mountPath: /models}]
       containers:
         - name: llama
-          image: ghcr.io/ggml-org/llama.cpp:server-cuda
+          # Pinned by digest (deploy.sh pre-pulls it and marks it pinned in containerd so image GC keeps it).
+          image: ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:4ccae195bf542f7844301ae06891baa32a7551cb16de8428af6e929403d4292c
+          imagePullPolicy: IfNotPresent
           args:
             - --model
             - "/models/gguf/translategemma-4b-it.Q4_K_M.gguf"

@@ -200,6 +200,7 @@ function renderTranslation(job: JobState) {
   const tr = job.tr, sents = job.sentences ?? [];
   const wanted = trBox.checked || (job.phase === "running" || !tr ? !!job.translateTo : true);
   trPane.hidden = !wanted;
+  document.body.classList.toggle("wide", wanted);
   if (!wanted) { trKey = ""; trSpans = []; return; }
   if (job.phase === "running" || !tr) {
     trOut.textContent = ""; trSpans = []; trKey = "";
