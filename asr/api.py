@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -16,6 +17,9 @@ from asr.schemas import (Alternative, Channel, ErrorResponse, ListenResponse,
                          Metadata, Results, Utterance)
 from asr.worker import GpuOutOfMemory, GpuWorker, QueueFull
 
+APP_VERSION = "0.2.0"
+GIT_SHA = os.environ.get("GIT_SHA", "unknown")
+HOSTNAME = os.environ.get("HOSTNAME", "unknown")
 MAX_BYTES = 200 * 1024 * 1024
 TIMEOUT_S = 300
 
@@ -43,6 +47,7 @@ async def add_request_id(request: Request, call_next):
     request.state.request_id = str(uuid.uuid4())
     response = await call_next(request)
     response.headers["dg-request-id"] = request.state.request_id
+    response.headers["x-served-by"] = HOSTNAME
     return response
 
 
@@ -86,6 +91,34 @@ async def readyz(request: Request):
     return {"status": "ready", "pending": q.qsize()}
 
 
+def _versions() -> dict:
+    import torch
+    try:
+        from importlib.metadata import version
+        nemo_version = version("nemo-toolkit")
+    except Exception:
+        nemo_version = "unknown"
+    gpu = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    return {"nemo_version": nemo_version, "torch_version": torch.__version__, "gpu": gpu}
+
+
+@app.get("/v1/info")
+async def info(request: Request):
+    """Service, model and pod versions (shown in the Chrome extension footer)."""
+    engine = request.app.state.worker.engine
+    if not hasattr(request.app.state, "versions"):
+        request.app.state.versions = await asyncio.to_thread(_versions)
+    return {
+        "service_version": f"{APP_VERSION}+{GIT_SHA}",
+        "app_version": APP_VERSION,
+        "git_sha": GIT_SHA,
+        "model": engine.model_name,
+        **request.app.state.versions,
+        "pod": HOSTNAME,
+        "word_timestamps": getattr(engine, "word_timestamps", False),
+    }
+
+
 @app.post("/v1/listen", response_model=ListenResponse)
 async def listen(
     request: Request,
@@ -121,7 +154,12 @@ async def listen(
                           duration=round(len(audio) / SAMPLE_RATE, 3),
                           models=[request.app.state.worker.engine.model_name]),
         results=Results(
-            channels=[Channel(alternatives=[Alternative(transcript=transcript)])],
+            channels=[Channel(alternatives=[Alternative(
+                transcript=transcript,
+                words=[{"word": w.word, "start": w.start, "end": w.end,
+                        "confidence": w.confidence, "punctuated_word": w.word}
+                       for s in segments for w in s.words],
+            )])],
             utterances=[Utterance(start=s.start, end=s.end, transcript=s.text)
                         for s in segments] if utterances else None,
         ),

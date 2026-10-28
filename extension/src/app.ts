@@ -1,31 +1,43 @@
-const LANGS = ["auto","bg","cs","da","de","el","en","es","et","fi","fr","hr","hu","it","lt","lv","mt","nl","pl","pt","ro","ru","sk","sl","sv","uk"];
-const DEFAULT_SERVER = "http://192.168.8.226:30800";
-const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm" };
+import { DEFAULT_SERVER, LANGS, JobState, Word, getAudio, getState, putAudio } from "./shared";
 
+const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm" };
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const server = $<HTMLInputElement>("server"), lang = $<HTMLSelectElement>("lang");
 const drop = $<HTMLLabelElement>("drop"), fileInput = $<HTMLInputElement>("file");
-const status = $("status"), errBox = $("error"), meta = $("meta"), out = $("out");
-const copyBtn = $<HTMLButtonElement>("copy"), dlBtn = $<HTMLButtonElement>("dl");
+const statusEl = $("status"), errBox = $("error"), meta = $("meta"), out = $("out"), versions = $("versions");
+const player = $<HTMLAudioElement>("player");
+const copyBtn = $<HTMLButtonElement>("copy"), dlBtn = $<HTMLButtonElement>("dl"), pinBtn = $<HTMLButtonElement>("pin");
 
-interface Utterance { start: number; end: number; transcript: string }
-let plainText = "", baseName = "transcript";
+const isPanel = new URLSearchParams(location.search).has("panel");
+if (isPanel) { document.body.classList.add("panel"); pinBtn.hidden = true; }
+
+let plainText = "", baseName = "transcript", timer: ReturnType<typeof setInterval> | undefined;
+let spans: { el: HTMLElement; start: number; end: number }[] = [];
+let audioUrl: string | undefined, audioKey = "", renderedKey = "";
+
+const fmt = (s: number) => { const m = Math.floor(s / 60); return `${String(m).padStart(2, "0")}:${(s - m * 60).toFixed(2).padStart(5, "0")}`; };
+const baseUrl = () => (server.value.trim() || DEFAULT_SERVER).replace(/\/+$/, "");
 
 for (const l of LANGS) lang.add(new Option(l, l));
-chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto" }).then((s) => {
+const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto" }).then((s) => {
   server.value = s.server as string; lang.value = s.language as string;
 });
-server.addEventListener("change", () => chrome.storage.local.set({ server: server.value.trim().replace(/\/+$/, "") || DEFAULT_SERVER }));
+server.addEventListener("change", () => { chrome.storage.local.set({ server: baseUrl() }); void loadVersions(); });
 lang.addEventListener("change", () => chrome.storage.local.set({ language: lang.value }));
+
+// sidePanel.open needs a user gesture, so resolve the window id up front, not inside the click.
+let winId: number | undefined;
+chrome.windows.getCurrent().then((w) => (winId = w.id));
+pinBtn.addEventListener("click", () => {
+  if (winId === undefined) return;
+  chrome.sidePanel.open({ windowId: winId }).then(() => window.close(), (e) => showError(`Side panel: ${e.message}`));
+});
 
 drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
 drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer?.files[0]; if (f) void handle(f); });
+drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer?.files[0]; if (f) void start(f); });
 drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
-fileInput.addEventListener("change", () => { const f = fileInput.files?.[0]; if (f) void handle(f); fileInput.value = ""; });
-
-const fmt = (s: number) => { const m = Math.floor(s / 60); return `${String(m).padStart(2, "0")}:${(s - m * 60).toFixed(2).padStart(5, "0")}`; };
-const showError = (msg: string) => { errBox.textContent = msg; errBox.hidden = false; };
+fileInput.addEventListener("change", () => { const f = fileInput.files?.[0]; if (f) void start(f); fileInput.value = ""; });
 
 async function ensurePermission(base: string): Promise<boolean> {
   const origin = new URL(base).origin + "/*";
@@ -33,71 +45,123 @@ async function ensurePermission(base: string): Promise<boolean> {
   return chrome.permissions.request({ origins: [origin] });
 }
 
-function upload(url: string, file: File, mime: string, onProgress: (p: number) => void): Promise<{ status: number; body: string }> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url);
-    xhr.setRequestHeader("Content-Type", mime);
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
-    xhr.upload.onload = () => onProgress(1);
-    xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
-    xhr.onerror = () => reject(new Error("Network error: could not reach the server. Check the URL, that the service is up, and (for https://slim) that the certificate has been accepted."));
-    xhr.ontimeout = () => reject(new Error("Request timed out"));
-    xhr.send(file);
-  });
-}
-
-async function handle(file: File) {
+async function start(file: File) {
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   if (!(ext in EXT_MIME) && !file.type.startsWith("audio/")) { showError(`Unsupported file type: ${file.name}`); return; }
   const mime = file.type || EXT_MIME[ext] || "application/octet-stream";
-  const base = (server.value.trim() || DEFAULT_SERVER).replace(/\/+$/, "");
-  errBox.hidden = true; out.textContent = ""; meta.textContent = ""; copyBtn.disabled = dlBtn.disabled = true;
-  baseName = file.name.replace(/\.[^.]+$/, "") || "transcript";
-
+  const base = baseUrl();
   try { if (!(await ensurePermission(base))) { showError(`Permission to access ${base} was denied.`); return; } }
   catch { showError(`Invalid server URL: ${base}`); return; }
-
+  await putAudio(file, file.name);  // the service worker reads the audio from IndexedDB
   const url = `${base}/v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true`;
-  const t0 = performance.now(); let phase = "Uploading", pct = 0;
-  const render = () => {
-    const el = ((performance.now() - t0) / 1000).toFixed(1);
-    status.innerHTML = `<span class="spin"></span>${phase}${phase === "Uploading" ? ` ${Math.round(pct * 100)}%` : "…"} — ${el}s`;
-  };
-  const timer = setInterval(render, 100); render();
-  drop.classList.add("busy");
-  try {
-    const r = await upload(url, file, mime, (p) => { pct = p; if (p >= 1) phase = "Transcribing"; });
-    let data: any; try { data = JSON.parse(r.body); } catch { data = null; }
-    if (r.status < 200 || r.status >= 300) {
-      const hint = r.status === 503 ? " (server busy — try again shortly)" : r.status === 504 ? " (server timed out)" : "";
-      showError(`Error ${r.status}${hint}: ${data?.err_msg ?? (r.body.slice(0, 300) || "unknown error")}` +
-        (data?.err_code ? `\nCode: ${data.err_code}` : "") + (data?.request_id ? `\nRequest ID: ${data.request_id}` : ""));
-      status.textContent = `Failed after ${((performance.now() - t0) / 1000).toFixed(1)}s`;
-      return;
-    }
-    const transcript: string = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? "";
-    const utts: Utterance[] = data?.results?.utterances ?? [];
-    const models = data?.metadata?.models; const model = Array.isArray(models) ? models.join(", ") : (models ?? "unknown");
-    meta.textContent = `Model: ${model}${data?.metadata?.duration ? ` · Audio ${Number(data.metadata.duration).toFixed(1)}s` : ""}`;
-    if (utts.length) {
-      for (const u of utts) {
-        const d = document.createElement("div"); d.className = "u";
-        const t = document.createElement("span"); t.className = "t"; t.textContent = `[${fmt(u.start)} – ${fmt(u.end)}]`;
-        d.append(t, document.createTextNode(u.transcript)); out.append(d);
-      }
-      plainText = utts.map((u) => `[${fmt(u.start)} - ${fmt(u.end)}] ${u.transcript}`).join("\n") + `\n\n${transcript}\n`;
-    } else { out.textContent = transcript || "(empty transcript)"; plainText = transcript + "\n"; }
-    copyBtn.disabled = dlBtn.disabled = false;
-    status.textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(1)}s — ${file.name}`;
-  } catch (e) {
-    showError((e as Error).message); status.textContent = "";
-  } finally { clearInterval(timer); drop.classList.remove("busy"); }
+  await chrome.storage.session.set({ job: { phase: "running", fileName: file.name, startedAt: Date.now() } satisfies JobState });
+  await chrome.runtime.sendMessage({ type: "transcribe", url, mime });
 }
+
+function showError(msg: string) { errBox.textContent = msg; errBox.hidden = false; }
+
+async function loadPlayer(name: string) {
+  if (audioKey === name && audioUrl) return;
+  const a = await getAudio();
+  if (!a) return;
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  audioUrl = URL.createObjectURL(a.blob); audioKey = a.name;
+  player.src = audioUrl; player.hidden = false;
+}
+
+async function render(job: JobState) {
+  clearInterval(timer);
+  const running = job.phase === "running";
+  drop.classList.toggle("busy", running);
+  errBox.hidden = job.phase !== "error";
+  if (job.phase === "error") errBox.textContent = job.error ?? "Unknown error";
+  if (job.fileName) { baseName = job.fileName.replace(/\.[^.]+$/, "") || "transcript"; await loadPlayer(job.fileName); }
+  if (running) {
+    const tick = () => { statusEl.innerHTML = `<span class="spin"></span>Transcribing ${job.fileName ?? ""}… ${((Date.now() - job.startedAt!) / 1000).toFixed(1)}s`; };
+    tick(); timer = setInterval(tick, 100);
+    out.textContent = ""; meta.textContent = ""; copyBtn.disabled = dlBtn.disabled = true; renderedKey = "";
+    return;
+  }
+  const took = job.startedAt && job.finishedAt ? ` in ${((job.finishedAt - job.startedAt) / 1000).toFixed(1)}s` : "";
+  statusEl.textContent = job.phase === "done" ? `Done${took}: ${job.fileName}` : job.phase === "error" ? `Failed${took}` : "";
+  if (job.phase !== "done") return;
+  const key = `${job.requestId}`;
+  if (key === renderedKey) return;
+  renderedKey = key;
+  meta.textContent = [`Model: ${job.model ?? "unknown"}`, job.duration ? `audio ${job.duration.toFixed(1)}s` : "",
+    job.servedBy ? `served by ${job.servedBy}` : "", (job.words?.length ? "" : "no word timings, utterance highlighting")]
+    .filter(Boolean).join(" · ");
+  renderTranscript(job);
+  copyBtn.disabled = dlBtn.disabled = false;
+}
+
+function renderTranscript(job: JobState) {
+  out.textContent = ""; spans = [];
+  const words: Word[] = job.words ?? [], utts = job.utterances ?? [];
+  if (words.length) {
+    // Group words into utterance paragraphs when available.
+    let ui = 0, para: HTMLElement | null = null;
+    for (const w of words) {
+      while (ui < utts.length && w.start >= utts[ui].end) ui++;
+      if (!para || para.dataset.u !== String(ui)) {
+        para = document.createElement("div"); para.className = "p"; para.dataset.u = String(ui);
+        const t = document.createElement("span"); t.className = "t"; t.textContent = fmt(utts[ui]?.start ?? w.start);
+        para.append(t); out.append(para);
+      }
+      const el = document.createElement("span"); el.className = "w"; el.textContent = w.punctuated_word ?? w.word;
+      el.onclick = () => seek(w.start);
+      para.append(el, document.createTextNode(" "));
+      spans.push({ el, start: w.start, end: w.end });
+    }
+  } else if (utts.length) {
+    for (const u of utts) {
+      const d = document.createElement("div"); d.className = "u"; d.onclick = () => seek(u.start);
+      const t = document.createElement("span"); t.className = "t"; t.textContent = `[${fmt(u.start)}–${fmt(u.end)}]`;
+      d.append(t, document.createTextNode(u.transcript)); out.append(d);
+      spans.push({ el: d, start: u.start, end: u.end });
+    }
+  } else out.textContent = job.transcript || "(empty transcript)";
+  plainText = utts.length
+    ? utts.map((u) => `[${fmt(u.start)} - ${fmt(u.end)}] ${u.transcript}`).join("\n") + "\n"
+    : (job.transcript ?? "") + "\n";
+}
+
+function seek(t: number) { player.currentTime = t; void player.play(); }
+
+let cur = -1;
+function highlight() {
+  const t = player.currentTime;
+  let i = -1;
+  // Binary search for the last span starting at or before t.
+  let lo = 0, hi = spans.length - 1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (spans[m].start <= t) { i = m; lo = m + 1; } else hi = m - 1; }
+  if (i >= 0 && t > spans[i].end + 0.3 && spans[i].el.classList.contains("w")) i = -1;  // in a pause
+  if (i === cur) return;
+  if (cur >= 0) spans[cur]?.el.classList.remove("cur");
+  cur = i;
+  if (i >= 0) { spans[i].el.classList.add("cur"); spans[i].el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+}
+player.addEventListener("timeupdate", highlight);
+player.addEventListener("seeked", highlight);
+player.addEventListener("play", () => { const loop = () => { highlight(); if (!player.paused) requestAnimationFrame(loop); }; requestAnimationFrame(loop); });
 
 copyBtn.addEventListener("click", async () => { await navigator.clipboard.writeText(plainText); copyBtn.textContent = "Copied!"; setTimeout(() => (copyBtn.textContent = "Copy"), 1200); });
 dlBtn.addEventListener("click", () => {
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([plainText], { type: "text/plain" }));
   a.download = `${baseName}.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
-export {};
+
+async function loadVersions() {
+  const ext = `Extension ${chrome.runtime.getManifest().version}`;
+  versions.textContent = `${ext} · service: loading…`;
+  try {
+    const r = await fetch(`${baseUrl()}/v1/info`, { signal: AbortSignal.timeout(5000) });
+    if (r.status === 404) { versions.textContent = `${ext} · service predates /v1/info (redeploy)`; return; }
+    const i = await r.json();
+    versions.textContent = `${ext} · Service ${i.service_version} · Model ${i.model} · NeMo ${i.nemo_version} · torch ${i.torch_version}` +
+      ` · Pod ${i.pod}${i.gpu ? ` · ${i.gpu}` : ""}`;
+  } catch { versions.textContent = `${ext} · service unreachable`; }
+}
+
+chrome.storage.session.onChanged.addListener((c) => { if (c.job) void render(c.job.newValue as JobState); });
+void settings.then(async () => { void loadVersions(); await render(await getState()); });

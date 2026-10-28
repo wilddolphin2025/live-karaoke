@@ -5,6 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu128 -r requirements.txt
 COPY asr/ asr/
+# Git short SHA of the build, reported by GET /v1/info. Last so code-only rebuilds stay cached.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     HF_HOME=/models
 EXPOSE 8000
