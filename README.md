@@ -140,7 +140,7 @@ initContainer downloads the 2.5 GB GGUF into
 `~/.cache/huggingface/gguf/` on first start if missing.
 
 ## Tests
-`tests/test_separate.py`: chunking/crossfade, job store lifecycle/TTL, cancellation, output naming, mux packet equality, the job API with fakes. Extension: `npm test` (pure helpers), `scripts/e2e.mjs` (live, puppeteer), `scripts/sep_e2e.mjs` + `scripts/sep_mock.py` (Remove vocals flow against a mock server).
+`tests/test_separate.py`: chunking/crossfade, job store lifecycle/TTL, cancellation, output naming, mux packet equality, the job API with fakes. Extension: `npm test` (pure helpers), `scripts/e2e.mjs` (live, puppeteer), `scripts/sep_e2e.mjs` + `scripts/sep_mock.py` (Remove vocals + karaoke auto-replace flow against a mock server).
 `pytest -m "not accuracy"`; `tests/test_translate.py` also has a live ru→en test (`ASR_URL=...`, marked `accuracy`).
 
 ### Translation quality notes (service 0.5.1+)

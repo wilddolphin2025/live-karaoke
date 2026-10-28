@@ -86,8 +86,10 @@ is highlighted too; click a translated sentence to seek. Copy/Download include t
 Settings → **Remove vocals (karaoke)**, **off by default**; nothing is ever separated unless it is ticked. When on:
 after the transcript (and the translation, if Translate is on) the background worker uploads the file to
 `POST /v1/separate` and polls `GET /v1/jobs/<id>` every 2 s. A row under the status line shows progress
-("Removing vocals on CUDA: 42%"), then **⬇ Download** (video with the lead voice removed, or an instrumental mp3) and a
-**🎶 Instrumental / 🎤 Original** switch for the player; while the instrumental plays, the words highlighted are the
-singer's (ASR on the vocals stem). Ticking it after a transcript removes the vocals of that file. **✕ Clear** cancels
+("Removing vocals on CUDA: 42%"). **0.6.1, karaoke mode:** when the job finishes, the karaoke file (video with the
+lead voice removed, or the instrumental) automatically **replaces the media in the player**, at the same position and
+play/pause state (the server's download supports HTTP Range, so it can seek). The highlighting then follows the
+singer's words (ASR on the vocals stem), **0.25 s ahead** of each word so you can sing along, with the current line
+marked and kept centred. **🎤 Original** switches back (and **🎶 Instrumental** again); **⬇ Download** saves the file. Ticking it after a transcript removes the vocals of that file. **✕ Clear** cancels
 polling and sends `DELETE /v1/jobs/<id>`, which deletes the job on the server. The chip shows "· no vocals" when on.
 Needs service 0.7.0 (older servers: "server predates /v1/separate").

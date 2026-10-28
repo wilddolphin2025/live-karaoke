@@ -1,4 +1,4 @@
-import { BUILD, needsTranslation, needsSeparation, sepStatusText, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
+import { BUILD, needsTranslation, needsSeparation, sepStatusText, wordAt, KARAOKE_LEAD_S, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
@@ -82,18 +82,24 @@ function renderSep(job: JobState) {
   sepDl.hidden = !ready;
   if (ready) { sepDl.href = s.downloadUrl!; sepDl.title = `Download the ${s.isVideo ? "video without the lead voice" : "instrumental"}`; }
   sepMode.hidden = !ready || !player || player.hidden;
+  // Karaoke: when the job finishes, the instrumental/karaoke video replaces the media in the player.
+  if (ready && player && !player.hidden && audioUrl && autoSwitched !== s.jobId) { autoSwitched = s.jobId!; switchTo("inst"); }
   sepMode.textContent = mode === "inst" ? "🎤 Original" : "🎶 Instrumental";
 }
 const escapeHtml = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
-sepMode.addEventListener("click", () => {
+// Swap the player's media in place, keeping position and play/pause state.
+function switchTo(m: "orig" | "inst") {
   const s = lastJob.sep;
-  if (!s?.downloadUrl || !player) return;
+  if (!s?.downloadUrl || !player || m === mode) return;
   const t = player.currentTime, playing = !player.paused;
-  mode = mode === "inst" ? "orig" : "inst";
+  mode = m;
   player.src = mode === "inst" ? s.downloadUrl : audioUrl!;
   player.addEventListener("loadedmetadata", () => { player!.currentTime = t; if (playing) void player!.play(); }, { once: true });
-  renderedKey = ""; renderTranscript(lastJob); renderSep(lastJob);
-});
+  document.body.classList.toggle("karaoke", mode === "inst");
+  renderedKey = ""; cur = -1; curLine = null; renderTranscript(lastJob); renderSep(lastJob);
+}
+let autoSwitched = "";  // sep job id the player was switched to automatically (once; Original stays a manual choice)
+sepMode.addEventListener("click", () => switchTo(mode === "inst" ? "orig" : "inst"));
 
 // sidePanel.open needs a user gesture, so resolve the window id up front, not inside the click.
 let winId: number | undefined;
@@ -142,7 +148,7 @@ async function start(file: File) {
 clearBtn.addEventListener("click", async () => {
   const reply = await chrome.runtime.sendMessage({ type: "clear" }).catch(() => null);
   if (!reply?.ok) { await clearAudio().catch(() => {}); await setState({ phase: "idle" }); }
-  lastAsk = ""; lastSepAsk = ""; staleWorker = "";
+  lastAsk = ""; lastSepAsk = ""; autoSwitched = ""; staleWorker = "";
   await render({ phase: "idle" });
 });
 
@@ -187,7 +193,7 @@ async function render(job: JobState) {
   const jobKey = `${job.fileName ?? ""}:${job.startedAt ?? ""}`;
   if (jobKey !== modeJob || job.sep?.status !== "done") {  // new file or no instrumental: back to the original
     if (mode === "inst" && player && audioUrl) player.src = audioUrl;
-    mode = "orig"; modeJob = jobKey;
+    mode = "orig"; modeJob = jobKey; document.body.classList.remove("karaoke");
   }
   errBox.hidden = job.phase !== "error";
   if (job.phase === "error") errBox.textContent = job.error ?? "Unknown error";
@@ -322,18 +328,25 @@ function highlightTranslation(t: number) {
   trCur = i;
   if (i >= 0) { trSpans[i].el.classList.add("cur"); trSpans[i].el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
 }
+let curLine: HTMLElement | null = null;
 function highlight() {
   const t = player.currentTime;
   highlightTranslation(t);
-  let i = -1;
-  // Binary search for the last span starting at or before t.
-  let lo = 0, hi = spans.length - 1;
-  while (lo <= hi) { const m = (lo + hi) >> 1; if (spans[m].start <= t) { i = m; lo = m + 1; } else hi = m - 1; }
-  if (i >= 0 && t > spans[i].end + 0.3 && spans[i].el.classList.contains("w")) i = -1;  // in a pause
+  const karaoke = mode === "inst";
+  // Karaoke: highlight a little ahead of the sung word, keep the current line marked and centred.
+  let i = wordAt(spans, t, karaoke ? KARAOKE_LEAD_S : 0, 0.3);
+  if (i >= 0 && !spans[i].el.classList.contains("w")) i = wordAt(spans, t, karaoke ? KARAOKE_LEAD_S : 0, Infinity);  // utterances: no pause gaps
+  if (karaoke) {
+    const line = (i >= 0 ? spans[i] : spans[wordAt(spans, t, KARAOKE_LEAD_S, Infinity)])?.el.closest<HTMLElement>(".p, .u") ?? null;
+    if (line !== curLine) {
+      curLine?.classList.remove("line"); curLine = line;
+      if (line) { line.classList.add("line"); line.scrollIntoView({ block: "center", behavior: "smooth" }); }
+    }
+  }
   if (i === cur) return;
   if (cur >= 0) spans[cur]?.el.classList.remove("cur");
   cur = i;
-  if (i >= 0) { spans[i].el.classList.add("cur"); spans[i].el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+  if (i >= 0) { spans[i].el.classList.add("cur"); if (!karaoke) spans[i].el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
 }
 for (const el of [audioEl, videoEl]) {
   el.addEventListener("timeupdate", highlight);

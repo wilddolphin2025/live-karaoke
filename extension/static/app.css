@@ -48,3 +48,6 @@ body.panel #panes{flex-direction:column}
 #sepbar[hidden],#sepmode[hidden],#sepdl[hidden]{display:none}
 #sepstatus{flex:1;min-height:1.2em;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #sepdl{white-space:nowrap}
+/* karaoke: current line stands out, sung-ahead word bold */
+body.karaoke .p.line,body.karaoke .u.line{background:#fff8d6;border-radius:4px}
+body.karaoke .w.cur{background:#ffb703;font-weight:600}

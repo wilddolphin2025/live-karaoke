@@ -41,3 +41,11 @@ test("job status mapping + status text", () => {
   assert.equal(sepStatusText(s), "Vocal removal failed: boom");
 });
 test("settings chip shows vocal removal", () => assert.equal(summaryText("auto", false, "en", true), "auto · no vocals"));
+
+// ---- 0.6.1 karaoke highlighting
+const { wordAt, KARAOKE_LEAD_S } = await import(out);
+const ws = [{ start: 1, end: 1.4 }, { start: 1.5, end: 2 }, { start: 4, end: 4.5 }];
+test("karaoke lead is 0.2-0.3 s", () => assert.ok(KARAOKE_LEAD_S >= 0.2 && KARAOKE_LEAD_S <= 0.3));
+test("no lead: word at t", () => { assert.equal(wordAt(ws, 1.3), 0); assert.equal(wordAt(ws, 0.9), -1); });
+test("lead: next word lights up early", () => { assert.equal(wordAt(ws, 1.3, 0.25), 1); assert.equal(wordAt(ws, 0.8, 0.25), 0); });
+test("pause between words: nothing highlighted until the lead", () => { assert.equal(wordAt(ws, 3, 0.25), -1); assert.equal(wordAt(ws, 3.8, 0.25), 2); });

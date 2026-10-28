@@ -154,3 +154,15 @@ export function applyJob(s: SeparationState, j: any): SeparationState {
   if (status === "done") { next.words = j?.result?.words ?? []; next.utterances = j?.result?.utterances ?? []; next.progress = 1; }
   return next;
 }
+
+/** Karaoke: highlight this far ahead of the sung word so the singer sees it coming. */
+export const KARAOKE_LEAD_S = 0.25;
+/** Index of the word to highlight at playback time t (spans sorted by start), or -1 in a pause.
+ *  With a lead the highlight moves to a word lead seconds before it starts. */
+export function wordAt(spans: { start: number; end: number }[], t: number, lead = 0, pause = 0.3): number {
+  const x = t + lead;
+  let i = -1, lo = 0, hi = spans.length - 1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (spans[m].start <= x) { i = m; lo = m + 1; } else hi = m - 1; }
+  if (i >= 0 && t > spans[i].end + pause) i = -1;
+  return i;
+}
