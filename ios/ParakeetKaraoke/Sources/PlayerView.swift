@@ -52,7 +52,7 @@ struct PlayerView: View {
     @State private var karaoke: Bool
     @AppStorage("translateTarget") private var target = "en"
     @AppStorage("showTranslation") private var showTranslation = false
-    @AppStorage("textSize") private var textSizeRaw = TextSize.medium.rawValue
+    @AppStorage(LyricScale.key) private var lyricScale = LyricScale.default
     @AppStorage("highlightLead") private var lead = 0.25
     @State private var trStatus: String?
     @State private var scrubbing: Double?
@@ -66,74 +66,94 @@ struct PlayerView: View {
     private var lines: [LyricLine] { Lyrics.lines(words) }
     private var translation: [String]? { showTranslation ? bundle.translations["\(karaoke ? "k" : "o")|\(target)"] : nil }
     private var mediaURL: URL { karaoke ? (bundle.karaokeURL ?? bundle.originalURL) : bundle.originalURL }
+    private var duration: Double { model.duration > 0 ? model.duration : bundle.duration }
 
     var body: some View {
-        ZStack {
-            CandyBackground()
-            VStack(spacing: 0) {
-                if bundle.isVideo {
-                    VideoSurface(player: model.player)
-                        .aspectRatio(16 / 9, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .padding(.horizontal)
-                }
-                LyricsView(lines: lines, words: words, time: model.time, lead: lead, karaoke: karaoke,
-                           size: TextSize(rawValue: textSizeRaw) ?? .medium, translation: translation)
-                controls
+        VStack(spacing: 0) {
+            if bundle.isVideo {
+                VideoSurface(player: model.player)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(.horizontal).padding(.top, 8)
+                    .accessibilityLabel("Video")
             }
+            LyricsView(lines: lines, words: words, time: model.time, lead: lead, scale: lyricScale, translation: translation)
+            controls
         }
+        .background(Color(.systemBackground))
         .navigationTitle(bundle.title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                ShareLink(item: mediaURL) { Label("Share", systemImage: "square.and.arrow.up") }
                 Menu {
-                    Picker("Text size", selection: $textSizeRaw) { ForEach(TextSize.allCases) { Text($0.label).tag($0.rawValue) } }
-                    Toggle("Show translation", isOn: $showTranslation)
-                    Picker("Translate to", selection: $target) { ForEach(Langs.targets, id: \.code) { Text($0.name).tag($0.code) } }
-                } label: { Image(systemName: "textformat.size") }
+                    Toggle(isOn: $showTranslation) { Label("Show Translation", systemImage: "character.bubble") }
+                    Picker(selection: $target) {
+                        ForEach(Langs.targets, id: \.code) { Text($0.name).tag($0.code) }
+                    } label: { Label("Translate To", systemImage: "globe") }
+                    .pickerStyle(.menu)
+                    Section("Text Size") {
+                        Button { lyricScale = min(LyricScale.range.upperBound, lyricScale + 0.1) } label: { Label("Larger", systemImage: "textformat.size.larger") }
+                        Button { lyricScale = max(LyricScale.range.lowerBound, lyricScale - 0.1) } label: { Label("Smaller", systemImage: "textformat.size.smaller") }
+                    }
+                } label: { Label("Display Options", systemImage: "textformat.size") }
             }
         }
         .onAppear { model.load(mediaURL, keepPosition: false); model.player.play() }
         .onDisappear { model.player.pause() }
         .onChange(of: karaoke) { model.load(mediaURL, keepPosition: true) }
+        .sensoryFeedback(.selection, trigger: karaoke)
         .task(id: "\(showTranslation)\(target)\(karaoke)") {
             if showTranslation { await Processor.shared.translate(bundle, karaoke: karaoke, target: target) { trStatus = $0 } }
         }
     }
 
     private var controls: some View {
-        VStack(spacing: 10) {
-            if let trStatus, showTranslation { Text(trStatus).font(.caption).foregroundStyle(.secondary) }
-            HStack(spacing: 0) {
-                modeButton("Karaoke", "mic.fill", true).disabled(bundle.karaokeFile == nil)
-                modeButton("Original", "person.wave.2.fill", false)
+        VStack(spacing: 12) {
+            if let trStatus, showTranslation {
+                Text(trStatus).font(.footnote).foregroundStyle(.secondary)
             }
-            .padding(4).background(Capsule().fill(.ultraThinMaterial))
-            VStack(spacing: 2) {
+            if bundle.karaokeFile != nil {
+                Picker("Track", selection: $karaoke) {
+                    Text("Original").tag(false)
+                    Text("Karaoke").tag(true)
+                }
+                .pickerStyle(.segmented)
+            }
+            VStack(spacing: 4) {
                 Slider(value: Binding(get: { scrubbing ?? model.time }, set: { scrubbing = $0 }),
-                       in: 0...max(1, model.duration > 0 ? model.duration : bundle.duration),
+                       in: 0...max(1, duration),
                        onEditingChanged: { editing in if !editing, let s = scrubbing { model.seek(s); scrubbing = nil } })
-                    .tint(Candy.pink)
-                HStack { Text(formatTime(scrubbing ?? model.time)); Spacer(); Text(formatTime(model.duration > 0 ? model.duration : bundle.duration)) }
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .accessibilityLabel("Playback position")
+                    .accessibilityValue("\(spokenTime(scrubbing ?? model.time)) of \(spokenTime(duration))")
+                HStack {
+                    Text(formatTime(scrubbing ?? model.time))
+                    Spacer()
+                    Text("-" + formatTime(max(0, duration - (scrubbing ?? model.time))))
+                }
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             }
-            HStack(spacing: 22) {
-                Button { model.seek(model.time - 10) } label: { Image(systemName: "gobackward.10") }.buttonStyle(RoundBubbleStyle(color: Candy.sky, size: 48))
-                Button { model.toggle() } label: { Image(systemName: model.playing ? "pause.fill" : "play.fill") }
-                    .buttonStyle(RoundBubbleStyle(color: Candy.pink, size: 70))
-                Button { model.seek(model.time + 10) } label: { Image(systemName: "goforward.10") }.buttonStyle(RoundBubbleStyle(color: Candy.lilac, size: 48))
-                Button { withAnimation(.spring) { showTranslation.toggle() } } label: { Image(systemName: "character.bubble.fill") }
-                    .buttonStyle(RoundBubbleStyle(color: showTranslation ? Candy.mint : .gray.opacity(0.6), size: 48))
+            HStack {
+                Spacer()
+                Button { model.seek(model.time - 10) } label: { Image(systemName: "gobackward.10").font(.title) }
+                    .accessibilityLabel("Back 10 seconds")
+                Spacer()
+                Button { model.toggle() } label: {
+                    Image(systemName: model.playing ? "pause.fill" : "play.fill").font(.largeTitle)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel(model.playing ? "Pause" : "Play")
+                Spacer()
+                Button { model.seek(model.time + 10) } label: { Image(systemName: "goforward.10").font(.title) }
+                    .accessibilityLabel("Forward 10 seconds")
+                Spacer()
             }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.primary)
         }
-        .padding().background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom))
-    }
-
-    private func modeButton(_ title: String, _ icon: String, _ k: Bool) -> some View {
-        Button { withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { karaoke = k } } label: {
-            Label(title, systemImage: icon).font(.subheadline.bold()).padding(.vertical, 8).frame(maxWidth: .infinity)
-                .foregroundStyle(karaoke == k ? .white : .primary)
-                .background { if karaoke == k { Capsule().fill(Candy.gradient(k ? 0 : 4)) } }
-        }
+        .padding(.horizontal).padding(.top, 12).padding(.bottom, 8)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 }
 
@@ -142,64 +162,68 @@ struct LyricsView: View {
     let words: [Word]
     let time: Double
     let lead: Double
-    let karaoke: Bool
-    let size: TextSize
+    let scale: Double
     let translation: [String]?
-    @ScaledMetric(relativeTo: .title) private var scale: CGFloat = 1
+    /// Base lyric size follows Dynamic Type (relative to .title2), times the user's relative size.
+    @ScaledMetric(relativeTo: .title2) private var base: CGFloat = 22
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let hi = Lyrics.wordAt(words, t: time, lead: lead)
         let started = Lyrics.lastStarted(words, t: time, lead: lead)
         let current = lines.lastIndex { $0.firstWord <= max(started, 0) } ?? 0
+        let size = base * scale
         GeometryReader { geo in
             ScrollViewReader { proxy in
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 18) {
-                        Color.clear.frame(height: geo.size.height * 0.4)
+                ScrollView {
+                    LazyVStack(spacing: size * 0.9) {
+                        Color.clear.frame(height: geo.size.height * 0.35).accessibilityHidden(true)
                         ForEach(lines) { line in
-                            VStack(spacing: 6) {
-                                lineText(line, hi: hi, started: started, isCurrent: line.id == current)
+                            let isCurrent = line.id == current
+                            VStack(spacing: size * 0.25) {
+                                lineText(line, hi: hi, isCurrent: isCurrent)
+                                    .font(.system(size: isCurrent ? size * 1.12 : size, weight: isCurrent ? .semibold : .regular))
+                                    .foregroundStyle(isCurrent ? Color(.label) : Color(.secondaryLabel))
                                 if let translation, line.id < translation.count, !translation[line.id].isEmpty {
-                                    Text(translation[line.id]).font(.system(size: size.points * scale * 0.62, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Candy.lilac).transition(.opacity.combined(with: .scale))
+                                    Text(translation[line.id])
+                                        .font(.system(size: max(18, size * 0.8)))
+                                        .foregroundStyle(Color(.secondaryLabel))
                                 }
                             }
+                            .lineSpacing(size * 0.2)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity)
-                            .scaleEffect(line.id == current ? 1.0 : 0.9)
-                            .opacity(line.id == current ? 1 : (abs(line.id - current) <= 2 ? 0.6 : 0.35))
-                            .blur(radius: line.id == current ? 0 : 0.4)
-                            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: current)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityAddTraits(isCurrent ? .isSelected : [])
                             .id(line.id)
                         }
-                        Color.clear.frame(height: geo.size.height * 0.4)
-                    }.padding(.horizontal)
+                        Color.clear.frame(height: geo.size.height * 0.35).accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, 20)
                 }
-                .onChange(of: current) { withAnimation(.easeInOut(duration: 0.45)) { proxy.scrollTo(current, anchor: .center) } }
+                .scrollIndicators(.hidden)
+                .onChange(of: current) {
+                    if reduceMotion { proxy.scrollTo(current, anchor: .center) }
+                    else { withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(current, anchor: .center) } }
+                }
                 .onChange(of: lines.count) { proxy.scrollTo(current, anchor: .center) }
                 .onAppear { proxy.scrollTo(current, anchor: .center) }
             }
             .overlay {
                 if lines.isEmpty {
-                    VStack { Text("🎶").font(.system(size: 60)); Text("No words found").font(.headline) }
+                    ContentUnavailableView("No Lyrics", systemImage: "text.quote",
+                                           description: Text("No words were recognized in this track."))
                 }
             }
         }
     }
 
-    private func lineText(_ line: LyricLine, hi: Int, started: Int, isCurrent: Bool) -> Text {
-        let font = Font.system(size: size.points * scale, weight: .heavy, design: .rounded)
+    /// Current line: words in .label, the word being sung in the tint color. Other lines inherit the caller's style.
+    private func lineText(_ line: LyricLine, hi: Int, isCurrent: Bool) -> Text {
         var t = Text("")
         for (k, w) in line.words.enumerated() {
-            let gi = line.firstWord + k
-            let piece = Text(k == 0 ? w.text : " " + w.text).font(font)
-            if gi == hi && isCurrent {
-                t = t + piece.foregroundColor(karaoke ? Candy.pink : Candy.sky)
-            } else if isCurrent && gi < max(hi, started + (hi < 0 ? 1 : 0)) {
-                t = t + piece.foregroundColor(karaoke ? Candy.lilac : Candy.mint)
-            } else {
-                t = t + piece.foregroundColor(.primary)
-            }
+            let piece = Text(k == 0 ? w.text : " " + w.text)
+            t = t + (isCurrent && line.firstWord + k == hi ? piece.foregroundColor(.accentColor) : piece)
         }
         return t
     }

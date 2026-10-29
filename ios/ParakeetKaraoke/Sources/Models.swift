@@ -137,4 +137,8 @@ enum Langs {
     static let source = ["auto","bg","cs","da","de","el","en","es","et","fi","fr","hr","hu","it","lt","lv","mt","nl","pl","pt","ro","ru","sk","sl","sv","uk"]
     static let targets: [Lang] = ([("en","English"),("ru","Russian"),("es","Spanish"),("fr","French"),("de","German"),("it","Italian"),("pt","Portuguese"),("pt-br","Portuguese (Brazil)"),("uk","Ukrainian"),("pl","Polish"),("nl","Dutch"),("tr","Turkish"),("ar","Arabic"),("he","Hebrew"),("hi","Hindi"),("ja","Japanese"),("ko","Korean"),("zh","Chinese (Simplified)"),("zh-tw","Chinese (Traditional)"),("vi","Vietnamese"),("th","Thai"),("id","Indonesian"),("sv","Swedish"),("no","Norwegian"),("da","Danish"),("fi","Finnish"),("cs","Czech"),("el","Greek"),("hu","Hungarian"),("ro","Romanian"),("bg","Bulgarian"),("sr","Serbian"),("hr","Croatian")] as [(String, String)]).map { Lang(code: $0.0, name: $0.1) }
     static func name(_ c: String) -> String { targets.first { $0.code == c }?.name ?? c }
+    /// Localized display name for a source language code ("auto" -> "Auto-Detect").
+    static func sourceName(_ c: String) -> String {
+        c == "auto" ? "Auto-Detect" : (Locale.current.localizedString(forLanguageCode: c) ?? c.uppercased())
+    }
 }
