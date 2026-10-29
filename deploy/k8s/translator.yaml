@@ -68,7 +68,7 @@ spec:
           volumeMounts: [{name: models, mountPath: /models, readOnly: false}]
       volumes:
         - name: models
-          hostPath: {path: /home/ykiryanov/.cache/huggingface, type: Directory}
+          hostPath: {path: ${MODEL_CACHE_DIR}, type: Directory}
 ---
 apiVersion: v1
 kind: Service

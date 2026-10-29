@@ -8,6 +8,6 @@
   "background": { "service_worker": "background.js" },
   "side_panel": { "default_path": "app.html?panel=1" },
   "permissions": ["storage", "sidePanel"],
-  "host_permissions": ["http://192.168.8.226/*", "https://slim/*"],
+  "host_permissions": [],
   "optional_host_permissions": ["<all_urls>"]
 }

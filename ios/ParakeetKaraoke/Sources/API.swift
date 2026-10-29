@@ -13,7 +13,8 @@ enum APIError: LocalizedError {
 }
 
 enum Settings {
-    static let defaultServer = "http://192.168.8.226:30800"
+    /// From LK_DEFAULT_SERVER in ios/Local.xcconfig (Info.plist LKDefaultServer); empty means "set it in Settings".
+    static let defaultServer = (Bundle.main.object(forInfoDictionaryKey: "LKDefaultServer") as? String ?? "").trimmingCharacters(in: .whitespaces)
     static var server: String { UserDefaults.standard.string(forKey: "serverURL") ?? defaultServer }
     static var language: String { UserDefaults.standard.string(forKey: "defaultLanguage") ?? "auto" }
 }

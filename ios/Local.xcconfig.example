@@ -1,0 +1,5 @@
+// Copy to ios/Local.xcconfig (gitignored), fill in, then run xcodegen.
+// Apple Developer team ID (Xcode > Settings > Accounts, or developer.apple.com > Membership).
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+// Default server URL. xcconfig treats // as a comment, so write the slashes as $()/$()/ (this expands to //).
+LK_DEFAULT_SERVER = http:/$()/YOUR_SERVER_IP:30800

@@ -1,5 +1,5 @@
 // Remove-vocals / karaoke flow. Works against scripts/sep_mock.py or the live service (0.7.0+).
-// Usage: CHROME=... SEP_SERVER=http://192.168.8.226:18998 node scripts/sep_e2e.mjs <dist> <media file> <scenario> [timeout s]
+// Usage: CHROME=... SEP_SERVER=http://<mock-host>:18998 node scripts/sep_e2e.mjs <dist> <media file> <scenario> [timeout s]
 //   on      tick before drop: job runs after the transcript, karaoke replaces the playing media (same position),
 //           untick -> original at the same position, tick -> karaoke again, reopen popup -> media restored, Clear -> DELETE
 //   off     never ticked: no separation request, no karaoke row
@@ -7,7 +7,7 @@
 //   cancel  tick, drop, untick while the job runs: job cancelled, original keeps playing, no karaoke row
 import puppeteer from "puppeteer-core";
 const [ext, file, scenario] = [process.argv[2], process.argv[3], process.argv[4] || "on"], LIMIT = Number(process.argv[5] || 60) * 1000;
-const SERVER = process.env.SEP_SERVER || process.env.SEP_MOCK || "http://192.168.8.226:18998";
+const SERVER = process.env.SEP_SERVER || process.env.SEP_MOCK || "http://localhost:18998";
 const browser = await puppeteer.launch({ executablePath: process.env.CHROME, headless: true,
   args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`, "--no-sandbox", "--autoplay-policy=no-user-gesture-required"] });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

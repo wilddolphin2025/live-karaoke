@@ -26,7 +26,7 @@ flowchart LR
 | Deployment + NodePort Service `parakeet-asr` | `asr.yaml` | 2 replicas, `nvidia.com/gpu: 1` each, `GPU_MEM_FRACTION=0.45`, `maxSurge 0` |
 | Deployment + Service `translator` | `translator.yaml` | 0 replicas; llama.cpp `server-cuda` pinned by digest; `--n-gpu-layers 18`, ctx 2048, parallel 1 |
 | Deployment + Service `separator` | `separator.yaml` | 0 replicas; same image, `uvicorn asr.separator_api:app` on :8001; **no** GPU slot |
-| Ingress + Middleware `asr-retry` | `asr-ingress.yaml` | Traefik, 2 retries, TLS `slim-tls` |
+| Ingress + Middleware `asr-retry` | `asr-ingress.yaml` | Traefik, 2 retries, TLS `${TLS_SECRET_NAME}` |
 | Headlamp | `headlamp*.yaml` | optional cluster UI |
 
 Service modules (`asr/`): `api.py` (FastAPI, middleware, errors, endpoints), `worker.py` (GPU worker queue),

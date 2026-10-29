@@ -2,5 +2,8 @@
 __pycache__/
 *.log
 *.wav
-deploy/tls/*.key
+deploy/tls/
+deploy/local.env
+extension/local.env
+ios/Local.xcconfig
 testdata/

@@ -1,7 +1,9 @@
 declare const __BUILD__: string;
 /** Extension build (manifest version), compiled into both the page and the service worker. */
 export const BUILD: string = typeof __BUILD__ === "string" ? __BUILD__ : "dev";
-export const DEFAULT_SERVER = "http://192.168.8.226:30800";
+declare const __DEFAULT_SERVER__: string;
+// Empty unless the build sets LK_SERVER (extension/local.env): first run then opens Settings.
+export const DEFAULT_SERVER: string = typeof __DEFAULT_SERVER__ === "string" ? __DEFAULT_SERVER__ : "";
 export const LANGS = ["auto","bg","cs","da","de","el","en","es","et","fi","fr","hr","hu","it","lt","lv","mt","nl","pl","pt","ro","ru","sk","sl","sv","uk"];
 
 // Target languages offered in the UI: the 55 that google/translategemma-4b-it was evaluated on (WMT24++);

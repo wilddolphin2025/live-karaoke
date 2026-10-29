@@ -14,7 +14,7 @@ Docs: **[BUILD.md](BUILD.md)** (build everything from scratch) · **[ARCHITECTUR
 
 | component | version | status |
 |---|---|---|
-| Service (`asr/`, `GET /v1/info` → `service_version`) | **0.7.0** | deployed on host `slim`; NeMo 3.0.0, torch 2.11.0+cu128 |
+| Service (`asr/`, `GET /v1/info` → `service_version`) | **0.7.0** | deployed on a single k3s GPU host; NeMo 3.0.0, torch 2.11.0+cu128 |
 | Chrome extension "Live Karaoke" (`extension/package.json`) | **0.6.3** | in daily use; unit tests and mock/live e2e |
 | iOS app "Live Karaoke" (`ios/project.yml`) | **1.0.0** (build 1), iOS 17+ | first version; runs on simulator and device |
 
@@ -31,7 +31,7 @@ Docs: **[BUILD.md](BUILD.md)** (build everything from scratch) · **[ARCHITECTUR
 - **iOS:** the **Files picker** import path is untested. URL import and deep links were tested.
 - **Demucs falls back to CPU** whenever less than 900 MiB VRAM is free, which is normal while ASR pods or the translator are resident. Then a 160 s song takes about 50 s instead of 14 s (`htdemucs`) or 50 s (`htdemucs_ft`, GPU).
 - Translate mode halves ASR throughput (1 ASR pod) and is slower and of lower quality than cloud translation.
-- Manifests hard-code the host paths `/home/ykiryanov/.cache/...` and the LAN IP `192.168.8.226`. Change them for your host.
+- Host paths, server IP/hostname, TLS secret and Apple team ID are not committed: set them in `deploy/local.env`, `extension/local.env` and `ios/Local.xcconfig`. See [Configure for your setup](BUILD.md#configure-for-your-setup).
 - x86_64 + CUDA only for now. For ARM see [ARCHITECTURE.md → Porting](ARCHITECTURE.md#porting-arm--non-cuda).
 
 ## Quick start
@@ -129,7 +129,7 @@ Errors: `404 NOT_FOUND`, `409 JOB_NOT_READY`, `503 SERVER_BUSY` + `Retry-After` 
 ```
 asr/            service: api.py (FastAPI), engine.py (NeMo), translate.py (translator client + ModeController),
                 jobs.py / separate.py / separator_api.py (vocal removal), sentences.py, audio.py, schemas.py
-deploy/         install.sh (host), deploy.sh (build + deploy), k8s/*.yaml, tls/slim.crt (key is gitignored)
+deploy/         install.sh (host), deploy.sh (build + deploy), k8s/*.yaml, render.sh, make-cert.sh, local.env.example (tls/ is gitignored)
 extension/      Chrome MV3 extension (TypeScript, esbuild)
 ios/            SwiftUI app (xcodegen project.yml)
 tests/          pytest (unit + `accuracy`-marked live tests)   bench/  WER and separation benchmarks

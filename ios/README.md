@@ -7,7 +7,7 @@ The Chrome extension in `../extension` is the reference implementation (same 0.2
     cd ios && xcodegen
     open ParakeetKaraoke.xcodeproj
 
-Default server: `http://192.168.8.226:30800` (change in Settings). Bundles (original, instrumental, vocals transcript,
+Default server: `LK_DEFAULT_SERVER` from `ios/Local.xcconfig`, else empty (set it in Settings). Bundles (original, instrumental, vocals transcript,
 translations) are stored with SwiftData + files in Application Support.
 
 Deep links (handy for testing with `xcrun simctl openurl booted ...`):

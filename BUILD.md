@@ -8,7 +8,7 @@ The commands below come from the repo's own scripts (`deploy/install.sh`, `deplo
 
 ## 1. Host prerequisites
 
-Reference host `slim`: x86_64 laptop with Ubuntu, an RTX 3050 Laptop GPU (4 GB), and k3s on a single node.
+Reference host: x86_64 laptop with Ubuntu, an RTX 3050 Laptop GPU (4 GB), and k3s on a single node.
 
 1. **Ubuntu + NVIDIA driver.** Install the proprietary driver (e.g. `sudo ubuntu-drivers install`), reboot, and check `nvidia-smi`.
    The service image uses CUDA 12.8 wheels (`torch==2.11.0+cu128`), so the driver must support CUDA 12.8.
@@ -35,7 +35,7 @@ Reference host `slim`: x86_64 laptop with Ubuntu, an RTX 3050 Laptop GPU (4 GB),
    and restarts k3s once.
 7. **Disk.** Plan on at least 40 GB free: service image ~10 GB+ (CUDA torch + NeMo) in both Docker and containerd, translator image ~3 GB,
    ASR model ~2.5 GB, GGUF 2.5 GB, Demucs weights 402 MB, plus job space (each job is refused below `JOBS_MIN_FREE_GB` = 5 GB free).
-8. **Host paths.** The manifests mount `/home/ykiryanov/.cache/huggingface` (models) and `/home/ykiryanov/.cache/parakeet-jobs`.
+8. **Host paths.** The manifests mount `${MODEL_CACHE_DIR}` (models) and `${JOBS_CACHE_DIR}` from `deploy/local.env` (see [Configure for your setup](#configure-for-your-setup)).
    **Edit them** in `deploy/k8s/{asr,translator,separator}.yaml` for your user, and `mkdir -p ~/.cache/huggingface` (it is `type: Directory`).
 
 ## 2. Service
@@ -67,8 +67,8 @@ It also resets to ASR mode, restarts a running separator on the new image, and w
 
 Optional extras:
 ```bash
-kubectl apply -f deploy/k8s/asr-ingress.yaml        # Traefik route /v1 with retry middleware, TLS secret slim-tls
-kubectl create secret tls slim-tls --cert=deploy/tls/slim.crt --key=deploy/tls/slim.key   # key is gitignored: make your own
+kubectl apply -f deploy/k8s/asr-ingress.yaml        # Traefik route /v1 with retry middleware, TLS secret ${TLS_SECRET_NAME}
+deploy/make-cert.sh   # self-signed cert in deploy/tls/ (gitignored) + the TLS secret; apply ingresses from deploy/render.sh output
 kubectl apply -f deploy/k8s/headlamp.yaml -f deploy/k8s/headlamp-ingress.yaml   # cluster UI
 ```
 
@@ -112,7 +112,7 @@ python3 scripts/sep_mock.py &                                                   
 CHROME=... SEP_SERVER=http://<host>:18998 node scripts/sep_e2e.mjs dist clip.mp4 on          # scenarios: on|off|late|cancel
 ```
 Load it: `chrome://extensions` → Developer mode → **Load unpacked** → `extension/dist` (or the extracted
-`parakeet-extension/` folder from the tarball). In ⚙ Settings, set **Server** (default `http://192.168.8.226:30800`).
+`parakeet-extension/` folder from the tarball). In ⚙ Settings, set **Server** (empty on first run unless you built with `LK_SERVER` in `extension/local.env`; e.g. `http://YOUR_SERVER_IP:30800`).
 Any other origin triggers a one-time permission prompt. To update: rebuild, then click reload on the extension card.
 
 ## 4. iOS app
@@ -123,7 +123,7 @@ brew install xcodegen
 cd ios && xcodegen                   # generates ParakeetKaraoke.xcodeproj from project.yml
 open ParakeetKaraoke.xcodeproj
 ```
-**Signing:** `project.yml` sets `DEVELOPMENT_TEAM: PPZTNTHDFC` (the original author's team) with automatic signing and the bundle id
+**Signing:** `DEVELOPMENT_TEAM` comes from `ios/Local.xcconfig` (gitignored; copy `ios/Local.xcconfig.example`) with automatic signing and the bundle id
 `com.wilddolphin.parakeetkaraoke`. Forkers should change both to their own values, then re-run `xcodegen`:
 ```yaml
 DEVELOPMENT_TEAM: <YOUR_TEAM_ID>
@@ -143,5 +143,32 @@ xcodebuild -project ParakeetKaraoke.xcodeproj -scheme ParakeetKaraoke -destinati
 xcrun devicectl list devices
 xcrun devicectl device install app --device <DEVICE_ID> build/Build/Products/Debug-iphoneos/ParakeetKaraoke.app
 ```
-**Server URL:** open Settings in the app (or `parakeetkaraoke://settings`). The default is `http://192.168.8.226:30800`. The first request
+**Server URL:** open Settings in the app (or `parakeetkaraoke://settings`). The default is `LK_DEFAULT_SERVER` from `ios/Local.xcconfig`, or empty (enter `http://YOUR_SERVER_IP:30800`). The first request
 triggers the iOS Local Network prompt. ATS allows plain HTTP (`NSAllowsArbitraryLoads`).
+
+## Configure for your setup
+
+Nothing host-specific is committed. Copy the examples and fill in your values; the copies are gitignored.
+
+```bash
+cp deploy/local.env.example deploy/local.env          # k8s manifests, deploy.sh, make-cert.sh
+cp extension/local.env.example extension/local.env    # optional: extension default server
+cp ios/Local.xcconfig.example ios/Local.xcconfig      # iOS signing team + default server
+DRY_RUN=1 deploy/deploy.sh                            # render manifests only, prints the output dir
+```
+
+| Placeholder | What it is | Where it is set | Example | How to find yours |
+|---|---|---|---|---|
+| `MODEL_CACHE_DIR` | Host dir with the HF cache, mounted at `/models` | `deploy/local.env` | `/home/alice/.cache/huggingface` | `echo $HOME/.cache/huggingface` on the GPU host |
+| `JOBS_CACHE_DIR` | Host dir for vocal-removal job files | `deploy/local.env` | `/home/alice/.cache/parakeet-jobs` | any dir on the GPU host (created on first use) |
+| `TLS_SECRET_NAME` | k8s TLS secret for the Traefik ingresses | `deploy/local.env` | `asr-tls` | your choice; `kubectl get secret` for existing |
+| `ASR_HOSTNAME` | Server hostname (cert CN/SAN, https URL) | `deploy/local.env` | `gpubox` | `hostname` on the server |
+| `ASR_HOST_IP` | Server LAN IP (cert SAN, client URLs) | `deploy/local.env` | `192.0.2.10` | `ip -4 addr` (Linux) / `ipconfig getifaddr en0` (macOS) |
+| `YOUR_SERVER_IP:30800` | Server URL the clients use (NodePort 30800) | extension/iOS Settings | `http://192.0.2.10:30800` | `ASR_HOST_IP` + `kubectl get svc` |
+| `LK_SERVER`, `LK_EXTRA_ORIGINS` | Extension default server and extra host permissions, baked in at build | `extension/local.env` (optional) | `http://192.0.2.10:30800`, `https://gpubox/*` | as above; without them the first run opens Settings |
+| `DEVELOPMENT_TEAM` | Apple signing team ID | `ios/Local.xcconfig` | `ABCDE12345` | Xcode → Settings → Accounts, or developer.apple.com → Account → Membership |
+| `LK_DEFAULT_SERVER` | iOS default server (write `//` as `/$()/`) | `ios/Local.xcconfig` | `http:/$()/192.0.2.10:30800` | as above |
+| TLS cert/key | Self-signed cert for `https://ASR_HOSTNAME` | `deploy/tls/` (gitignored) | `deploy/tls/gpubox.crt` | `deploy/make-cert.sh` (openssl), or `mkcert gpubox 192.0.2.10` |
+
+The e2e script `extension/scripts/sep_e2e.mjs` reads `SEP_MOCK`/`SEP_SERVER` from the environment (default `http://localhost:18998`).
+Package the extension (`npm run package`) on Linux: macOS BSD tar lacks `--transform`.

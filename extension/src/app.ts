@@ -42,6 +42,7 @@ for (const l of LANGS) lang.add(new Option(l, l));
 for (const [code, name] of TRANSLATE_LANGS) trLang.add(new Option(name, code));
 const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto", translate: false, translateTo: "en", separate: false }).then((s) => {
   server.value = s.server as string; lang.value = s.language as string;
+  if (!server.value.trim()) showSettings(true);   // first run: no server configured yet
   trBox.checked = s.translate as boolean; trLang.value = s.translateTo as string; trLang.disabled = !trBox.checked; sepBox.checked = s.separate === true; updateSummary();
 });
 trBox.addEventListener("change", () => { trLang.disabled = !trBox.checked; chrome.storage.local.set({ translate: trBox.checked }); void maybeTranslate(); });

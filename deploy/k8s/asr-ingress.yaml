@@ -14,7 +14,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     traefik.ingress.kubernetes.io/router.middlewares: default-asr-retry@kubernetescrd
 spec:
-  tls: [{secretName: slim-tls}]
+  tls: [{secretName: ${TLS_SECRET_NAME}}]
   rules:
     - http:
         paths:

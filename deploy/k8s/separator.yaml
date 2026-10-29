@@ -47,9 +47,9 @@ spec:
             - {name: jobs, mountPath: /jobs}
       volumes:
         - name: models
-          hostPath: {path: /home/ykiryanov/.cache/huggingface, type: Directory}
+          hostPath: {path: ${MODEL_CACHE_DIR}, type: Directory}
         - name: jobs
-          hostPath: {path: /home/ykiryanov/.cache/parakeet-jobs, type: DirectoryOrCreate}
+          hostPath: {path: ${JOBS_CACHE_DIR}, type: DirectoryOrCreate}
 ---
 apiVersion: v1
 kind: Service

@@ -79,7 +79,7 @@ async function run(url: string, mime: string, base: string, language: string, tr
     try { r = await fetch(url, { method: "POST", headers: { "Content-Type": mime }, body: audio.blob }); }
     catch (e) {
       await setState({ ...job, phase: "error", finishedAt: Date.now(),
-        error: `Network error: could not reach the server (${(e as Error).message}). Check the URL and that the service is up; for https://slim accept the certificate first.` });
+        error: `Network error: could not reach the server (${(e as Error).message}). Check the URL and that the service is up; for an https server with a self-signed cert, open it in a tab and accept the certificate first.` });
       return;
     }
     const { text, data } = await readJson(r);

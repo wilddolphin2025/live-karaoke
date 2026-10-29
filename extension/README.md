@@ -26,12 +26,12 @@ Outputs (gitignored):
 ## Install on another machine (e.g. your Mac)
 
 ```bash
-scp slim:~/parakeet/extension/release/parakeet-extension-0.6.3.tar.gz ~/
+scp YOUR_HOSTNAME:~/parakeet/extension/release/parakeet-extension-0.6.3.tar.gz ~/
 mkdir -p ~/parakeet-ext && tar -xzf ~/parakeet-extension-0.6.3.tar.gz -C ~/parakeet-ext
 # -> ~/parakeet-ext/parakeet-extension/manifest.json
 ```
 
-You can also copy the folder directly: `scp -r slim:~/parakeet/extension/dist ~/parakeet-ext/parakeet-extension`.
+You can also copy the folder directly: `scp -r YOUR_HOSTNAME:~/parakeet/extension/dist ~/parakeet-ext/parakeet-extension`.
 
 Then in Chrome:
 
@@ -57,16 +57,16 @@ line with Copy/Download, the player, and the transcript and translation panes, w
 (side by side in the popup and in a wide side panel, stacked in a narrow one). Everything below is in Settings, along with
 details of the last file and the version info (Extension, Service, Model, NeMo, torch, Pod, GPU, Mode).
 
-- **Server**: default `http://192.168.8.226:30800` (NodePort). `https://slim` (Traefik) also works. Any other URL triggers a one-time Chrome permission prompt (`optional_host_permissions`).
+- **Server**: empty on first run (Settings opens) unless built with `LK_SERVER` in `extension/local.env`; use `http://YOUR_SERVER_IP:30800` (NodePort) or `https://YOUR_HOSTNAME` (Traefik). Any other URL triggers a one-time Chrome permission prompt (`optional_host_permissions`).
 - **Spoken language**: `auto` or a language code.
 - **Translate to** + target language.
 - **Remove vocals (karaoke)**: off by default; see below.
 
 All are saved in `chrome.storage.local`.
 
-## Self-signed cert (https://slim)
+## Self-signed cert (https://YOUR_HOSTNAME)
 
-Chrome rejects the self-signed certificate until you trust it. Open `https://slim/` in a tab once and accept the warning (Advanced, then Proceed), or add the cert to your system keychain as trusted. Until then you get a "Network error". The machine also has to resolve `slim` (for example via /etc/hosts). The default `http://192.168.8.226:30800` avoids all of this.
+Chrome rejects the self-signed certificate until you trust it. Open `https://YOUR_HOSTNAME/` in a tab once and accept the warning (Advanced, then Proceed), or add the cert to your system keychain as trusted. Until then you get a "Network error". The machine also has to resolve `YOUR_HOSTNAME` (for example via /etc/hosts). Plain `http://YOUR_SERVER_IP:30800` avoids all of this.
 
 ## CORS
 

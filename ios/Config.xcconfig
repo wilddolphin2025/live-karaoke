@@ -1,0 +1,4 @@
+// Committed defaults. Put your own values in Local.xcconfig (gitignored; copy Local.xcconfig.example).
+DEVELOPMENT_TEAM =
+LK_DEFAULT_SERVER =
+#include? "Local.xcconfig"
