@@ -1,4 +1,6 @@
-# Building parakeet-asr from scratch
+# Building Live Karaoke from scratch
+
+This covers the Parakeet ASR service, the Chrome extension and the iOS app. Repo: https://github.com/wilddolphin2025/live-karaoke
 
 The commands below come from the repo's own scripts (`deploy/install.sh`, `deploy/deploy.sh`, `Makefile`,
 `extension/package.json`, `extension/scripts/*`, `ios/project.yml`). Where a step uses only standard tooling

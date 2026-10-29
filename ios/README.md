@@ -1,4 +1,4 @@
-# Parakeet Karaoke (iOS)
+# Live Karaoke (iOS)
 
 SwiftUI (iOS 17+) client for the Parakeet karaoke flow (`/v1/listen`, `/v1/separate`, `/v1/jobs`, `/v1/translate`, `/v1/info`).
 The Chrome extension in `../extension` is the reference implementation (same 0.25 s highlight lead, 503 Retry-After handling).

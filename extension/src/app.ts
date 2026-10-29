@@ -56,7 +56,7 @@ async function maybeTranslate() {
   lastAsk = ask;
   const reply = await chrome.runtime.sendMessage({ type: "translate", base: baseUrl(), language: lang.value, translateTo: trLang.value })
     .catch((e) => ({ err: String(e) }));
-  if (reply?.build !== BUILD) showError(`Background worker is ${reply?.build ? `build ${reply.build}` : "an older build"}, this page is ${BUILD}: open chrome://extensions and press Reload on Parakeet ASR.`);
+  if (reply?.build !== BUILD) showError(`Background worker is ${reply?.build ? `build ${reply.build}` : "an older build"}, this page is ${BUILD}: open chrome://extensions and press Reload on Live Karaoke.`);
 }
 server.addEventListener("change", () => { chrome.storage.local.set({ server: baseUrl() }); void loadVersions(); });
 lang.addEventListener("change", () => chrome.storage.local.set({ language: lang.value }));
@@ -153,7 +153,7 @@ async function start(file: File) {
   const reply = await chrome.runtime.sendMessage({ type: "transcribe", url, mime, base, language: lang.value, translateTo, separate }).catch((e) => ({ err: String(e) }));
   // A service worker left over from an older build still answers, but ignores translateTo.
   if (reply?.build !== BUILD) staleWorker = `Background worker is ${reply?.build ? `build ${reply.build}` : "an older build"}, this page is ${BUILD}` +
-    `: open chrome://extensions and press Reload on Parakeet ASR${translateTo ? " (translation will not start until then)" : ""}.`;
+    `: open chrome://extensions and press Reload on Live Karaoke${translateTo ? " (translation will not start until then)" : ""}.`;
   else staleWorker = "";
   if (staleWorker) showError(staleWorker);
 }

@@ -1,6 +1,6 @@
-# parakeet-asr
+# Live Karaoke
 
-A local, private, **Deepgram-compatible speech-to-text service**. Nothing leaves the box.
+Live Karaoke turns any song or video into sing-along karaoke on your own hardware: a timed transcript of the singer's words, an instrumental track and an optional translation. Its backend is the **Parakeet ASR service**, a local, private, **Deepgram-compatible speech-to-text service**. Nothing leaves the box.
 
 - **ASR:** `nvidia/nemotron-labs-unified-asr-0.6b` on NeMo (bf16, word timestamps, language prompt).
 - **Translation (optional):** `google/translategemma-4b-it` (Q4_K_M GGUF), served by llama.cpp and started on demand.
@@ -10,13 +10,13 @@ A local, private, **Deepgram-compatible speech-to-text service**. Nothing leaves
 
 Docs: **[BUILD.md](BUILD.md)** (build everything from scratch) · **[ARCHITECTURE.md](ARCHITECTURE.md)** (internals, for forkers).
 
-## Current state (tag `v0.7.0`)
+## Current state (service 0.7.0, extension 0.6.3)
 
 | component | version | status |
 |---|---|---|
 | Service (`asr/`, `GET /v1/info` → `service_version`) | **0.7.0** | deployed on host `slim`; NeMo 3.0.0, torch 2.11.0+cu128 |
-| Chrome extension (`extension/package.json`) | **0.6.2** | in daily use; unit tests and mock/live e2e |
-| iOS app "Karaoke" (`ios/project.yml`) | **1.0.0** (build 1), iOS 17+ | first version; runs on simulator and device |
+| Chrome extension "Live Karaoke" (`extension/package.json`) | **0.6.3** | in daily use; unit tests and mock/live e2e |
+| iOS app "Live Karaoke" (`ios/project.yml`) | **1.0.0** (build 1), iOS 17+ | first version; runs on simulator and device |
 
 ### Features
 - `POST /v1/listen`: Deepgram request/response shape, with `language`, `utterances`, `paragraphs`, word timings, `detected_language` and an ffmpeg fallback for video and container formats (mp4/mov/mkv/webm/m4a).
@@ -39,7 +39,7 @@ Docs: **[BUILD.md](BUILD.md)** (build everything from scratch) · **[ARCHITECTUR
 On an Ubuntu host with an NVIDIA GPU (details in [BUILD.md](BUILD.md)):
 
 ```bash
-git clone https://github.com/wilddolphin2025/parakeet-asr ~/parakeet && cd ~/parakeet
+git clone https://github.com/wilddolphin2025/live-karaoke ~/parakeet && cd ~/parakeet
 sudo deploy/install.sh          # NVIDIA Container Toolkit + k3s with the nvidia runtime
 deploy/deploy.sh                # build image, import into k3s, apply manifests (uses sudo)
 curl -s http://localhost:30800/v1/info

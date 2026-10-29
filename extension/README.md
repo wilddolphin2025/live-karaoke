@@ -1,4 +1,4 @@
-# Parakeet ASR Chrome extension (Manifest V3)
+# Live Karaoke Chrome extension (Manifest V3)
 
 Drag-and-drop audio transcription window for the Parakeet ASR service (Deepgram-compatible `POST /v1/listen`).
 
@@ -26,8 +26,8 @@ Outputs (gitignored):
 ## Install on another machine (e.g. your Mac)
 
 ```bash
-scp slim:~/parakeet/extension/release/parakeet-extension-0.5.0.tar.gz ~/
-mkdir -p ~/parakeet-ext && tar -xzf ~/parakeet-extension-0.5.0.tar.gz -C ~/parakeet-ext
+scp slim:~/parakeet/extension/release/parakeet-extension-0.6.3.tar.gz ~/
+mkdir -p ~/parakeet-ext && tar -xzf ~/parakeet-extension-0.6.3.tar.gz -C ~/parakeet-ext
 # -> ~/parakeet-ext/parakeet-extension/manifest.json
 ```
 
@@ -37,7 +37,7 @@ Then in Chrome:
 
 1. Open `chrome://extensions` and turn on **Developer mode** (top right).
 2. Click **Load unpacked** and select `~/parakeet-ext/parakeet-extension`.
-3. Pin "Parakeet ASR" and click the icon. A popup (800x600, the Chrome maximum) drops down from the icon. Drop an audio file (wav/mp3/flac/ogg/m4a/webm) or a video (mp4/mov/mkv/webm) on it or click to pick one.
+3. Pin "Live Karaoke" and click the icon. A popup (800x600, the Chrome maximum) drops down from the icon. Drop an audio file (wav/mp3/flac/ogg/m4a/webm) or a video (mp4/mov/mkv/webm) on it or click to pick one.
 4. Optional: click 📌 to move the UI into Chrome's side panel, which stays open on the right while you browse.
 
 To update: rebuild, re-extract over the same folder, then click the reload button on the extension card.

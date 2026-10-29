@@ -1,6 +1,6 @@
 # Architecture
 
-A deep dive for people forking parakeet-asr. For build steps, see [BUILD.md](BUILD.md). For the API surface, see [README.md](README.md#api).
+A deep dive for people forking Live Karaoke (repo `live-karaoke`; the backend and its k8s objects are still named `parakeet-asr`). For build steps, see [BUILD.md](BUILD.md). For the API surface, see [README.md](README.md#api).
 
 ## Components and Kubernetes objects
 

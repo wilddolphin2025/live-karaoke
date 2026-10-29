@@ -24,7 +24,7 @@ targets:
     info:
       path: ParakeetKaraoke/Info.plist
       properties:
-        CFBundleDisplayName: Karaoke
+        CFBundleDisplayName: Live Karaoke
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
         UIFileSharingEnabled: true
