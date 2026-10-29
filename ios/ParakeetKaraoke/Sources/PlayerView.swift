@@ -2,10 +2,19 @@ import SwiftUI
 import AVFoundation
 import AVKit
 
+/// Playback position, published ~30x/s. Kept separate from PlayerModel so only the views that
+/// show the time (lyrics, scrubber) re-render each tick; the toolbar and its Menu do not
+/// (rebuilding the Menu every tick swallowed its taps during playback).
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published var time: Double = 0
+}
+
 @MainActor
 final class PlayerModel: ObservableObject {
     let player = AVPlayer()
-    @Published var time: Double = 0
+    let clock = PlaybackClock()
+    var time: Double { clock.time }
     @Published var duration: Double = 0
     @Published var playing = false
     private var observer: Any?
@@ -15,9 +24,11 @@ final class PlayerModel: ObservableObject {
         observer = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] t in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.time = t.seconds
-                self.playing = self.player.rate > 0
-                if let d = self.player.currentItem?.duration.seconds, d.isFinite { self.duration = d }
+                self.clock.time = t.seconds
+                // Assign only on change: every @Published assignment re-renders observers.
+                let p = self.player.rate > 0
+                if p != self.playing { self.playing = p }
+                if let d = self.player.currentItem?.duration.seconds, d.isFinite, d != self.duration { self.duration = d }
             }
         }
     }
@@ -31,7 +42,7 @@ final class PlayerModel: ObservableObject {
         if wasPlaying { player.play() }
     }
     func toggle() { if player.rate > 0 { player.pause() } else { player.play() }; playing = player.rate > 0 }
-    func seek(_ s: Double) { player.seek(to: CMTime(seconds: max(0, s), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero); time = s }
+    func seek(_ s: Double) { player.seek(to: CMTime(seconds: max(0, s), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero); clock.time = s }
 }
 
 final class PlayerUIView: UIView {
@@ -55,7 +66,6 @@ struct PlayerView: View {
     @AppStorage(LyricScale.key) private var lyricScale = LyricScale.default
     @AppStorage("highlightLead") private var lead = 0.25
     @State private var trStatus: String?
-    @State private var scrubbing: Double?
 
     init(bundle: KaraokeBundle, startKaraoke: Bool) {
         self.bundle = bundle
@@ -66,7 +76,6 @@ struct PlayerView: View {
     private var lines: [LyricLine] { Lyrics.lines(words) }
     private var translation: [String]? { showTranslation ? bundle.translations["\(karaoke ? "k" : "o")|\(target)"] : nil }
     private var mediaURL: URL { karaoke ? (bundle.karaokeURL ?? bundle.originalURL) : bundle.originalURL }
-    private var duration: Double { model.duration > 0 ? model.duration : bundle.duration }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,15 +86,26 @@ struct PlayerView: View {
                     .padding(.horizontal).padding(.top, 8)
                     .accessibilityLabel("Video")
             }
-            LyricsView(lines: lines, words: words, time: model.time, lead: lead, scale: lyricScale, translation: translation)
+            LyricsView(lines: lines, words: words, clock: model.clock, lead: lead, scale: lyricScale, translation: translation)
             controls
         }
         .background(Color(.systemBackground))
         .navigationTitle(bundle.title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                // SF Symbols has no "translate.fill"; a button-style Toggle gives the standard filled "on" state.
+                Toggle(isOn: $showTranslation) { Label("Translation", systemImage: "translate") }
+                    .toggleStyle(.button)
+                .accessibilityLabel("Translation")
+                .accessibilityIdentifier("translateButton")
+                .accessibilityValue(showTranslation ? "On, \(Langs.name(target))" : "Off")
+                .contextMenu {
+                    Picker(selection: $target) {
+                        ForEach(Langs.targets, id: \.code) { Text($0.name).tag($0.code) }
+                    } label: { Label("Translate To", systemImage: "globe") }
+                }
                 ShareLink(item: mediaURL) { Label("Share", systemImage: "square.and.arrow.up") }
-                Menu {
+                if !model.playing { Menu {
                     Toggle(isOn: $showTranslation) { Label("Show Translation", systemImage: "character.bubble") }
                     Picker(selection: $target) {
                         ForEach(Langs.targets, id: \.code) { Text($0.name).tag($0.code) }
@@ -96,6 +116,8 @@ struct PlayerView: View {
                         Button { lyricScale = max(LyricScale.range.lowerBound, lyricScale - 0.1) } label: { Label("Smaller", systemImage: "textformat.size.smaller") }
                     }
                 } label: { Label("Display Options", systemImage: "textformat.size") }
+                .accessibilityIdentifier("displayOptions")
+                }
             }
         }
         .onAppear { model.load(mediaURL, keepPosition: false); model.player.play() }
@@ -119,20 +141,7 @@ struct PlayerView: View {
                 }
                 .pickerStyle(.segmented)
             }
-            VStack(spacing: 4) {
-                Slider(value: Binding(get: { scrubbing ?? model.time }, set: { scrubbing = $0 }),
-                       in: 0...max(1, duration),
-                       onEditingChanged: { editing in if !editing, let s = scrubbing { model.seek(s); scrubbing = nil } })
-                    .accessibilityLabel("Playback position")
-                    .accessibilityValue("\(spokenTime(scrubbing ?? model.time)) of \(spokenTime(duration))")
-                HStack {
-                    Text(formatTime(scrubbing ?? model.time))
-                    Spacer()
-                    Text("-" + formatTime(max(0, duration - (scrubbing ?? model.time))))
-                }
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            }
+            Scrubber(model: model, clock: model.clock, fallbackDuration: bundle.duration)
             HStack {
                 Spacer()
                 Button { model.seek(model.time - 10) } label: { Image(systemName: "gobackward.10").font(.title) }
@@ -143,6 +152,7 @@ struct PlayerView: View {
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .accessibilityLabel(model.playing ? "Pause" : "Play")
+                .accessibilityIdentifier("playPause")
                 Spacer()
                 Button { model.seek(model.time + 10) } label: { Image(systemName: "goforward.10").font(.title) }
                     .accessibilityLabel("Forward 10 seconds")
@@ -157,10 +167,35 @@ struct PlayerView: View {
     }
 }
 
+struct Scrubber: View {
+    @ObservedObject var model: PlayerModel
+    @ObservedObject var clock: PlaybackClock
+    let fallbackDuration: Double
+    @State private var scrubbing: Double?
+    private var duration: Double { model.duration > 0 ? model.duration : fallbackDuration }
+    var body: some View {
+        VStack(spacing: 4) {
+            Slider(value: Binding(get: { scrubbing ?? clock.time }, set: { scrubbing = $0 }),
+                   in: 0...max(1, duration),
+                   onEditingChanged: { editing in if !editing, let s = scrubbing { model.seek(s); scrubbing = nil } })
+                .accessibilityLabel("Playback position")
+                .accessibilityValue("\(spokenTime(scrubbing ?? clock.time)) of \(spokenTime(duration))")
+            HStack {
+                Text(formatTime(scrubbing ?? clock.time))
+                Spacer()
+                Text("-" + formatTime(max(0, duration - (scrubbing ?? clock.time))))
+            }
+            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
 struct LyricsView: View {
     let lines: [LyricLine]
     let words: [Word]
-    let time: Double
+    @ObservedObject var clock: PlaybackClock
+    private var time: Double { clock.time }
     let lead: Double
     let scale: Double
     let translation: [String]?
@@ -177,7 +212,6 @@ struct LyricsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: size * 0.9) {
-                        Color.clear.frame(height: geo.size.height * 0.35).accessibilityHidden(true)
                         ForEach(lines) { line in
                             let isCurrent = line.id == current
                             VStack(spacing: size * 0.25) {
@@ -197,9 +231,9 @@ struct LyricsView: View {
                             .accessibilityAddTraits(isCurrent ? .isSelected : [])
                             .id(line.id)
                         }
-                        Color.clear.frame(height: geo.size.height * 0.35).accessibilityHidden(true)
                     }
                     .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
                 }
                 .scrollIndicators(.hidden)
                 .onChange(of: current) {
@@ -207,7 +241,7 @@ struct LyricsView: View {
                     else { withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(current, anchor: .center) } }
                 }
                 .onChange(of: lines.count) { proxy.scrollTo(current, anchor: .center) }
-                .onAppear { proxy.scrollTo(current, anchor: .center) }
+                .onAppear { if started > 0 { proxy.scrollTo(current, anchor: .center) } }
             }
             .overlay {
                 if lines.isEmpty {
