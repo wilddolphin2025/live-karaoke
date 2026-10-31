@@ -1,18 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
 
-
-<g fill="none" stroke-linecap="round" stroke="#FFFFFF">
-  <rect x="244" y="196" width="180" height="328" rx="90" fill="#FFFFFF" stroke="none"/>
-  <g stroke="#000000" stroke-width="14"><line x1="292" y1="256" x2="376" y2="256"/><line x1="280" y1="292" x2="388" y2="292"/>
-  <line x1="280" y1="328" x2="388" y2="328"/><line x1="280" y1="364" x2="388" y2="364"/></g>
-  <line x1="244" y1="402" x2="424" y2="402" stroke="#000000" stroke-width="10" stroke-linecap="butt"/>
-  <path d="M194 420 A140 140 0 0 0 474 420" stroke-width="36"/>
-  <line x1="200" y1="420" x2="244" y2="420" stroke-width="24"/><line x1="424" y1="420" x2="468" y2="420" stroke-width="24"/>
-  <line x1="334" y1="578" x2="334" y2="760" stroke-width="36"/>
-  <line x1="254" y1="778" x2="414" y2="778" stroke-width="36"/>
-</g>
+<!-- Microphone: Phosphor Icons "microphone-stage" (fill), MIT License. See CREDITS.md -->
+<g transform="translate(60 312) scale(1.85)" fill="#FFFFFF"><path d="M115.06,46.36a4,4,0,0,0-6.11.54A71.54,71.54,0,0,0,96,88a73.29,73.29,0,0,0,.63,9.42L27.12,192.22A15.93,15.93,0,0,0,28.71,213L43,227.29a15.93,15.93,0,0,0,20.78,1.59l94.81-69.53A73.29,73.29,0,0,0,168,160a71.54,71.54,0,0,0,41.09-12.93,4,4,0,0,0,.54-6.11Zm2.61,103.28-16,16a8,8,0,1,1-11.31-11.31l16-16a8,8,0,0,1,11.31,11.31Zm109.4-20.56a4,4,0,0,1-6.12.54L126.38,35.05a4,4,0,0,1,.54-6.12A71.93,71.93,0,0,1,227.07,129.08Z"/></g>
 <g fill="none" stroke-linecap="round">
-  <line x1="590" y1="330" x2="830" y2="330" stroke="rgba(255,255,255,0.5)" stroke-width="56"/>
-  <line x1="590" y1="470" x2="868" y2="470" stroke="#FFFFFF" stroke-width="72"/>
-  <line x1="590" y1="610" x2="790" y2="610" stroke="rgba(255,255,255,0.5)" stroke-width="56"/></g>
+  <line x1="610" y1="400" x2="850" y2="400" stroke="rgba(255,255,255,0.5)" stroke-width="56"/>
+  <line x1="610" y1="540" x2="888" y2="540" stroke="#FFFFFF" stroke-width="72"/>
+  <line x1="610" y1="680" x2="810" y2="680" stroke="rgba(255,255,255,0.5)" stroke-width="56"/></g>
 </svg>
