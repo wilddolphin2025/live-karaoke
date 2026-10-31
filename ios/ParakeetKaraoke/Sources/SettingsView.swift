@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage("highlightLead") private var lead = 0.25
     @State private var info: [String: Any]?
     @State private var infoError: String?
+    @State private var token = AccessToken.value
 
     var body: some View {
         Form {
@@ -21,7 +22,20 @@ struct SettingsView: View {
                 TextField("Server URL", text: $server, prompt: Text("http://YOUR_SERVER_IP:30800")).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("Test Connection") { Task { await load() } }
                 if !Settings.defaultServer.isEmpty { Button("Reset to Default") { server = Settings.defaultServer } }
-            } header: { Text("Server") } footer: { Text("The Live Karaoke server that transcribes songs and removes vocals.") }
+                SecureField("Access Token", text: $token, prompt: Text("Optional"))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .textContentType(.password)
+                    .accessibilityIdentifier("accessTokenField")
+                    .onChange(of: token) { _, t in AccessToken.value = t }
+                HStack {
+                    Button("Paste Token") { if let p = UIPasteboard.general.string { token = p.trimmingCharacters(in: .whitespacesAndNewlines) } }
+                        .buttonStyle(.borderless)
+                    Spacer()
+                    if !token.isEmpty { Button("Clear Token", role: .destructive) { token = "" }.buttonStyle(.borderless) }
+                }
+            } header: { Text("Server") } footer: {
+                Text("The Live Karaoke server that transcribes songs and removes vocals. The access token is only needed for a server behind a protected public address; leave it empty on your local network. It is stored in the Keychain.")
+            }
             Section("Songs") {
                 Picker("Default language", selection: $language) {
                     ForEach(Langs.source, id: \.self) { Text(Langs.sourceName($0)).tag($0) }

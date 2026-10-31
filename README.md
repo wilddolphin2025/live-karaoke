@@ -26,6 +26,11 @@ Docs: **[BUILD.md](BUILD.md)** (build everything from scratch) · **[ARCHITECTUR
 - Extension: drag-and-drop transcription, playback with word highlighting, translation pane, karaoke swap in place, side panel.
 - iOS app: a library of karaoke bundles (Files or URL import), karaoke/original toggle, timed translation, and deep links.
 
+### Remote access (optional)
+The clients accept a server URL with a path (e.g. `https://YOUR_HOSTNAME/karaoke` behind a reverse proxy) and an
+optional **access token**, sent as `Authorization: Bearer` on every server request. Leave it empty on a LAN; for a
+public edge, use the token your own edge checks. See [BUILD.md → Access token](BUILD.md#access-token-and-public-edge-optional).
+
 ### Privacy (iOS app)
 The public app sends audio only to the server you configure. Optional add-on builds (see BUILD.md,
 `LK_PREMIUM`) may look up official lyrics on [LRCLIB](https://lrclib.net) when online, sending only the

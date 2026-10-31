@@ -29,6 +29,8 @@
 <section id="settings" hidden>
   <div class="bar"><button id="back">← Back</button><strong>Settings</strong></div>
   <label class="field">Server <input id="server" type="url" spellcheck="false"></label>
+  <label class="field">Access token <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="optional"><button id="tokenclear" type="button" hidden>Clear</button></label>
+  <small class="note">Only for a server behind a protected public address (sent as <code>Authorization: Bearer</code>). Leave empty on your local network.</small>
   <label class="field">Spoken language <select id="lang"></select></label>
   <div class="trrow"><label><input id="tr" type="checkbox"> Translate to</label> <select id="trlang"></select></div>
   <small class="note" id="trnote">Translation runs privately on this server: slower, lower quality. Ticking it after a transcript translates that transcript.</small>

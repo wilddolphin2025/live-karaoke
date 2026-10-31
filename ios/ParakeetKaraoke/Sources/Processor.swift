@@ -67,8 +67,14 @@ final class Processor {
             // 0. Download the source if it came from a URL.
             if !FileManager.default.fileExists(atPath: b.originalURL.path), let s = b.sourceURL, let u = URL(string: s) {
                 set(b, .importing, "Downloading source…", 0.02, ctx)
-                let (tmp, r) = try await ParakeetAPI.session.download(from: u)
-                if let h = r as? HTTPURLResponse, !(200..<300).contains(h.statusCode) { throw APIError.http(h.statusCode, "source download failed") }
+                // The token goes only to our own server, never to a third-party link.
+                var req = URLRequest(url: u)
+                if api.isServerURL(u) { ParakeetAPI.authorize(&req, token: api.token) }
+                let (tmp, r) = try await ParakeetAPI.session.download(for: req)
+                if let h = r as? HTTPURLResponse, !(200..<300).contains(h.statusCode) {
+                    if api.isServerURL(u) { try APIError.check(h.statusCode, Data(), "source download failed") }
+                    throw APIError.http(h.statusCode, "source download failed")
+                }
                 if let mt = r.mimeType, mt.hasPrefix("video") { b.isVideo = true }
                 try FileManager.default.moveItem(at: tmp, to: b.originalURL)
             }

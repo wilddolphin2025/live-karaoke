@@ -8,6 +8,8 @@ mkdirSync("release", { recursive: true });
 const base = resolve("release", `parakeet-extension-${version}`);
 rmSync(`${base}.tar.gz`, { force: true }); rmSync(`${base}.zip`, { force: true });
 // tarball extracts to ./parakeet-extension/ ; zip has manifest.json at root (Chrome Web Store format)
-execFileSync("tar", ["-czf", `${base}.tar.gz`, "--transform", "s,^dist,parakeet-extension,", "dist"], { stdio: "inherit" });
+// GNU tar renames with --transform, BSD tar (macOS) with -s.
+const gnu = execFileSync("tar", ["--version"]).toString().includes("GNU");
+execFileSync("tar", ["-czf", `${base}.tar.gz`, ...(gnu ? ["--transform", "s,^dist,parakeet-extension,"] : ["-s", ",^dist,parakeet-extension,"]), "dist"], { stdio: "inherit" });
 execFileSync("zip", ["-qr", `${base}.zip`, "."], { cwd: "dist", stdio: "inherit" });
 console.log(`Packaged:\n  ${base}.tar.gz\n  ${base}.zip`);

@@ -157,6 +157,24 @@ xcrun devicectl device install app --device <DEVICE_ID> build/Build/Products/Deb
 **Server URL:** open Settings in the app (or `parakeetkaraoke://settings`). The default is `LK_DEFAULT_SERVER` from `ios/Local.xcconfig`, or empty (enter `http://YOUR_SERVER_IP:30800`). The first request
 triggers the iOS Local Network prompt. ATS allows plain HTTP (`NSAllowsArbitraryLoads`).
 
+## Access token and public edge (optional)
+
+On a LAN the clients talk to `http://YOUR_SERVER_IP:30800` and need no token. If you expose the server through a
+reverse proxy at a path, e.g. nginx at `https://YOUR_HOSTNAME/karaoke/` stripping `/karaoke/` and proxying to
+`:30800`, set **Server** to `https://YOUR_HOSTNAME/karaoke` in the extension's ⚙ Settings or the iOS app's Settings.
+The clients append `v1/...` to the base URL, so the path prefix is kept (`https://YOUR_HOSTNAME/karaoke/v1/info`).
+
+If the edge enforces a token, enter it as **Access token** (extension: password field, stored in
+`chrome.storage.local`; iOS: Settings → Server → Access Token, stored in the Keychain, with Paste/Clear). Every
+server request then carries `Authorization: Bearer <token>`: listen, translate, separate, jobs, the media
+download (fetched with the header, never `?access_token=` in a URL) and Test Connection / `v1/info`. An empty token
+sends no header. A 401/403 shows "Access token missing or invalid — check Settings". The token is never sent to
+other hosts (e.g. LRCLIB or a song link you import).
+
+The token comes from **your own edge** (whatever your proxy checks). Forks: nothing is committed; there is no
+built-in token. For the extension, add the edge origin to `LK_EXTRA_ORIGINS` in `extension/local.env`
+(e.g. `https://YOUR_HOSTNAME/*`), or accept the one-time permission prompt.
+
 ## Configure for your setup
 
 Nothing host-specific is committed. Copy the examples and fill in your values; the copies are gitignored.
@@ -179,8 +197,9 @@ DRY_RUN=1 deploy/deploy.sh                            # render manifests only, p
 | `LK_SERVER`, `LK_EXTRA_ORIGINS` | Extension default server and extra host permissions, baked in at build | `extension/local.env` (optional) | `http://192.0.2.10:30800`, `https://gpubox/*` | as above; without them the first run opens Settings |
 | `DEVELOPMENT_TEAM` | Apple signing team ID | `ios/Local.xcconfig` | `ABCDE12345` | Xcode → Settings → Accounts, or developer.apple.com → Account → Membership |
 | `LK_PREMIUM`, `LK_PREMIUM_PATH` | Optional, private: link the maintainer's add-on package (not needed for forks) | `ios/Local.xcconfig` (optional) | `1`, `../../live-karaoke-premium` | leave unset |
+| Access token | Optional Bearer token for a protected public edge (not needed on a LAN) | extension/iOS Settings (never committed) | `YOUR_ACCESS_TOKEN` | from your own edge/proxy config |
 | `LK_DEFAULT_SERVER` | iOS default server (write `//` as `/$()/`) | `ios/Local.xcconfig` | `http:/$()/192.0.2.10:30800` | as above |
 | TLS cert/key | Self-signed cert for `https://ASR_HOSTNAME` | `deploy/tls/` (gitignored) | `deploy/tls/gpubox.crt` | `deploy/make-cert.sh` (openssl), or `mkcert gpubox 192.0.2.10` |
 
 The e2e script `extension/scripts/sep_e2e.mjs` reads `SEP_MOCK`/`SEP_SERVER` from the environment (default `http://localhost:18998`).
-Package the extension (`npm run package`) on Linux: macOS BSD tar lacks `--transform`.
+Package the extension with `npm run package` (GNU or BSD/macOS tar).

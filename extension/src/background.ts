@@ -2,7 +2,7 @@
 // Flow: POST /v1/listen?paragraphs=true (plain Deepgram, fast) -> show transcript -> then
 // POST /v1/translate one timed sentence at a time, publishing each translation as it lands ->
 // only if "Remove vocals" is on: POST /v1/separate and poll the job (0.6.0).
-import { BUILD, LANGS, applyJob, clearAudio, getAudio, getState, setState, JobState, SeparationState, Sentence, TranslationState } from "./shared";
+import { AUTH_MSG, BUILD, LANGS, apiFetch, apiUrl, isAuthError, applyJob, clearAudio, getAudio, getState, setState, JobState, SeparationState, Sentence, TranslationState } from "./shared";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false }).catch(() => {});
@@ -24,7 +24,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     sepGen++;
     void getState().then(async (j) => {
       const s = j.sep;
-      if (s?.jobId) await fetch(`${s.base}/v1/jobs/${s.jobId}`, { method: "DELETE" }).catch(() => {});
+      if (s?.jobId) await apiFetch(apiUrl(s.base, `v1/jobs/${s.jobId}`), { method: "DELETE" }).catch(() => {});
       const { sep: _drop, separate: _s, ...rest } = j;
       await setState(rest);
     }).then(() => reply({ ok: true, build: BUILD }));
@@ -39,7 +39,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     // Clear button: cancel any running upload/translation/separation loop, delete the server job,
     // drop the stored audio and job.
     generation++; sepGen++; clearInterval(keepAlive);
-    void getState().then((j) => { const s = j.sep; if (s?.jobId) return fetch(`${s.base}/v1/jobs/${s.jobId}`, { method: "DELETE" }).then(() => {}); })
+    void getState().then((j) => { const s = j.sep; if (s?.jobId) return apiFetch(apiUrl(s.base, `v1/jobs/${s.jobId}`), { method: "DELETE" }).then(() => {}); })
       .catch(() => {})
       .then(() => clearAudio()).catch(() => {}).then(() => setState({ phase: "idle" })).then(() => reply({ ok: true, build: BUILD }));
     return true;
@@ -76,7 +76,7 @@ async function run(url: string, mime: string, base: string, language: string, tr
   keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(), 20_000);
   try {
     let r: Response;
-    try { r = await fetch(url, { method: "POST", headers: { "Content-Type": mime }, body: audio.blob }); }
+    try { r = await apiFetch(url, { method: "POST", headers: { "Content-Type": mime }, body: audio.blob }); }
     catch (e) {
       await setState({ ...job, phase: "error", finishedAt: Date.now(),
         error: `Network error: could not reach the server (${(e as Error).message}). Check the URL and that the service is up; for an https server with a self-signed cert, open it in a tab and accept the certificate first.` });
@@ -85,6 +85,7 @@ async function run(url: string, mime: string, base: string, language: string, tr
     const { text, data } = await readJson(r);
     const servedBy = r.headers.get("x-served-by") ?? undefined;
     const finishedAt = Date.now();
+    if (isAuthError(r.status)) { await setState({ ...job, phase: "error", finishedAt, servedBy, error: AUTH_MSG }); return; }
     if (!r.ok) {
       const hint = r.status === 503 ? " (server busy, try again shortly)" : r.status === 504 ? " (server timed out)" : "";
       await setState({ ...job, phase: "error", finishedAt, servedBy, requestId: data?.request_id,
@@ -153,7 +154,7 @@ async function translateAll(job: JobState, base: string, language: string, targe
       if (gen !== generation) return null;
       let r: Response;
       try {
-        r = await fetch(`${base}/v1/translate`, { method: "POST", headers: { "Content-Type": "application/json" },
+        r = await apiFetch(apiUrl(base, "v1/translate"), { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ target, source, sentences: batch }) });
       } catch (e) {
         if (attempt >= 4) throw new Error(`could not reach the server (${(e as Error).message})`);
@@ -161,6 +162,7 @@ async function translateAll(job: JobState, base: string, language: string, targe
       }
       const { text, data } = await readJson(r);
       if (r.ok) return data;
+      if (isAuthError(r.status)) throw new Error(AUTH_MSG);
       if (r.status === 404) throw new Error("server predates /v1/translate (redeploy the service to 0.5.0)");
       if (r.status === 503 && attempt < MAX_WARM_TRIES) {
         const wait = Math.min(60, Math.max(3, Number(r.headers.get("retry-after")) || 15));
@@ -211,11 +213,12 @@ async function separate(language: string, baseArg?: string) {
     const lang = LANGS.includes(language) ? language : "auto";
     let r: Response;
     try {
-      r = await fetch(`${base}/v1/separate?language=${encodeURIComponent(lang)}`, { method: "POST",
+      r = await apiFetch(apiUrl(base, `v1/separate?language=${encodeURIComponent(lang)}`), { method: "POST",
         headers: { "Content-Type": audio.blob.type || "application/octet-stream", "X-Filename": encodeURIComponent(audio.name) },
         body: audio.blob });
     } catch (e) { await fail(`could not reach the server (${(e as Error).message})`); return; }
     const { text, data } = await readJson(r);
+    if (isAuthError(r.status)) { await fail(AUTH_MSG); return; }
     if (r.status === 404) { await fail("server predates /v1/separate (redeploy the service to 0.7.0)"); return; }
     if (!r.ok) { await fail(`Error ${r.status}: ${data?.err_msg ?? text.slice(0, 200)}`); return; }
     sep = applyJob({ ...sep, jobId: data.job_id, status: "queued" }, data);
@@ -224,8 +227,9 @@ async function separate(language: string, baseArg?: string) {
       await sleep(2000);
       if (g !== sepGen) return;
       let p: Response;
-      try { p = await fetch(`${base}/v1/jobs/${sep.jobId}`); }
+      try { p = await apiFetch(apiUrl(base, `v1/jobs/${sep.jobId}`)); }
       catch { if (++misses > 15) { await fail("lost contact with the server"); return; } continue; }
+      if (isAuthError(p.status)) { await fail(AUTH_MSG); return; }
       if (p.status === 404) { await fail("job expired or was deleted on the server"); return; }
       const j = (await readJson(p)).data;
       if (!p.ok || !j) { if (++misses > 15) { await fail(`Error ${p.status}`); return; } continue; }

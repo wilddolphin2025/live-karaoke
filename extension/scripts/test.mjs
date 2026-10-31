@@ -62,3 +62,50 @@ test("on with none -> start", () => assert.equal(sepToggleAction(true, done), "s
 test("on after a failure -> start again", () => assert.equal(sepToggleAction(true, { ...done, sep: { ...sepRun.sep, status: "error" } }), "start"));
 test("on while running -> wait", () => assert.equal(sepToggleAction(true, sepRun), "wait"));
 test("no file -> nothing", () => assert.equal(sepToggleAction(true, { phase: "idle" }), "none"));
+
+// ---- 0.7.0 access token + base URL with a path prefix, against a local mock server
+import http from "node:http";
+const { apiUrl, apiFetch, fetchMediaUrl, resolveServerUrl, authHeaders, AUTH_MSG } = await import(out);
+const store = { token: "" };
+globalThis.chrome = { storage: { local: { get: async (d) => ({ ...d, ...store }) } } };
+const seen = []; let status = 200;
+const srv = http.createServer((q, s) => { seen.push({ url: q.url, method: q.method, auth: q.headers.authorization });
+  q.resume(); q.on("end", () => { s.writeHead(status, { "Content-Type": q.url.endsWith("/download") ? "audio/mpeg" : "application/json" }); s.end(q.url.endsWith("/download") ? Buffer.alloc(32) : "{}"); }); });
+await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+const host = `http://127.0.0.1:${srv.address().port}`;
+const every = async (base) => {
+  seen.length = 0;
+  await apiFetch(apiUrl(base, "v1/info"));
+  await apiFetch(apiUrl(base, "v1/listen?language=en&utterances=true&paragraphs=true"), { method: "POST", headers: { "Content-Type": "audio/mpeg" }, body: new Blob([new Uint8Array(3)]) });
+  await apiFetch(apiUrl(base, "v1/translate"), { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  await apiFetch(apiUrl(base, "v1/separate?language=en"), { method: "POST", body: new Blob([new Uint8Array(3)]) });
+  await apiFetch(apiUrl(base, "v1/jobs/j1"));
+  const s = applyJob({ base: base.replace(/\/+$/, ""), jobId: "j1", status: "muxing", progress: 0, startedAt: 0 }, { status: "done", download_url: "/v1/jobs/j1/download" });
+  const blobUrl = await fetchMediaUrl(s.downloadUrl);
+  await apiFetch(apiUrl(base, "v1/jobs/j1"), { method: "DELETE" });
+  return blobUrl;
+};
+test("path prefix kept on every endpoint; Bearer on every request incl. media download", async () => {
+  store.token = " tok-1 ";
+  const blobUrl = await every(`${host}/karaoke/`);
+  assert.deepEqual(seen.map((x) => x.url.split("?")[0]), ["/karaoke/v1/info", "/karaoke/v1/listen", "/karaoke/v1/translate", "/karaoke/v1/separate", "/karaoke/v1/jobs/j1", "/karaoke/v1/jobs/j1/download", "/karaoke/v1/jobs/j1"]);
+  for (const x of seen) { assert.equal(x.auth, "Bearer tok-1", x.url); assert.ok(!/token/i.test(x.url)); }
+  assert.match(blobUrl, /^blob:/);
+});
+test("no token -> no Authorization header; plain LAN base", async () => {
+  store.token = "";
+  await every(host);
+  assert.equal(seen[0].url, "/v1/info");
+  for (const x of seen) assert.equal(x.auth, undefined);
+});
+test("401/403 on media -> auth message", async () => {
+  store.token = "bad";
+  for (status of [401, 403]) await assert.rejects(fetchMediaUrl(apiUrl(host, "v1/jobs/j1/download")), { message: AUTH_MSG });
+  status = 200;
+});
+test("url helpers", () => {
+  assert.equal(apiUrl("https://rtc.example/karaoke/", "/v1/info"), "https://rtc.example/karaoke/v1/info");
+  assert.equal(resolveServerUrl("https://rtc.example/karaoke", "https://other/x"), "https://other/x");
+  assert.deepEqual(authHeaders("  "), {});
+  srv.close();
+});

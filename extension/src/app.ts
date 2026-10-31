@@ -1,4 +1,4 @@
-import { BUILD, needsTranslation, needsSeparation, sepStatusText, sepToggleAction, wordAt, KARAOKE_LEAD_S, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
+import { AUTH_MSG, BUILD, apiFetch, apiUrl, fetchMediaUrl, isAuthError, needsTranslation, needsSeparation, sepStatusText, sepToggleAction, wordAt, KARAOKE_LEAD_S, summaryText, DEFAULT_SERVER, LANGS, TRANSLATE_LANGS, JobState, Word, TranslationState, clearAudio, getAudio, getState, putAudio, setState } from "./shared";
 
 const EXT_MIME: Record<string, string> = { wav: "audio/wav", mp3: "audio/mpeg", flac: "audio/flac", ogg: "audio/ogg", m4a: "audio/mp4", webm: "audio/webm",
   mp4: "video/mp4", mov: "video/quicktime", mkv: "video/x-matroska" };
@@ -13,6 +13,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !setting
 function updateSummary() {
   summary.textContent = summaryText(lang.value, trBox.checked, trLang.value, sepBox?.checked ?? false);
 }
+const token = $<HTMLInputElement>("token"), tokenClear = $<HTMLButtonElement>("tokenclear");
 const server = $<HTMLInputElement>("server"), lang = $<HTMLSelectElement>("lang");
 const trBox = $<HTMLInputElement>("tr"), trLang = $<HTMLSelectElement>("trlang");
 const drop = $<HTMLLabelElement>("drop"), fileInput = $<HTMLInputElement>("file");
@@ -40,8 +41,8 @@ const baseUrl = () => (server.value.trim() || DEFAULT_SERVER).replace(/\/+$/, ""
 
 for (const l of LANGS) lang.add(new Option(l, l));
 for (const [code, name] of TRANSLATE_LANGS) trLang.add(new Option(name, code));
-const settings = chrome.storage.local.get({ server: DEFAULT_SERVER, language: "auto", translate: false, translateTo: "en", separate: false }).then((s) => {
-  server.value = s.server as string; lang.value = s.language as string;
+const settings = chrome.storage.local.get({ token: "", server: DEFAULT_SERVER, language: "auto", translate: false, translateTo: "en", separate: false }).then((s) => {
+  server.value = s.server as string; token.value = s.token as string; tokenClear.hidden = !token.value; lang.value = s.language as string;
   if (!server.value.trim()) showSettings(true);   // first run: no server configured yet
   trBox.checked = s.translate as boolean; trLang.value = s.translateTo as string; trLang.disabled = !trBox.checked; sepBox.checked = s.separate === true; updateSummary();
 });
@@ -59,6 +60,10 @@ async function maybeTranslate() {
     .catch((e) => ({ err: String(e) }));
   if (reply?.build !== BUILD) showError(`Background worker is ${reply?.build ? `build ${reply.build}` : "an older build"}, this page is ${BUILD}: open chrome://extensions and press Reload on Live Karaoke.`);
 }
+const saveToken = () => { token.value = token.value.trim(); tokenClear.hidden = !token.value; chrome.storage.local.set({ token: token.value }); void loadVersions(); };
+token.addEventListener("change", saveToken);
+token.addEventListener("paste", () => setTimeout(saveToken, 0));
+tokenClear.addEventListener("click", () => { token.value = ""; saveToken(); });
 server.addEventListener("change", () => { chrome.storage.local.set({ server: baseUrl() }); void loadVersions(); });
 lang.addEventListener("change", () => chrome.storage.local.set({ language: lang.value }));
 // "Remove vocals": strictly opt-in. Ticking it after a transcript removes the vocals of that file.
@@ -94,7 +99,7 @@ function renderSep(job: JobState) {
   sepStatus.title = s.error ?? "";
   const ready = s.status === "done" && !!s.downloadUrl;
   sepDl.hidden = !ready;
-  if (ready) { sepDl.href = s.downloadUrl!; sepDl.title = `Download the ${s.isVideo ? "video without the lead voice" : "instrumental"}`; }
+  if (ready) { sepDl.href = instUrl && instFor === s.downloadUrl ? instUrl : "#"; sepDl.download = `${baseName}-instrumental.${s.isVideo ? "mp4" : "mp3"}`; sepDl.title = `Download the ${s.isVideo ? "video without the lead voice" : "instrumental"}`; }
   sepMode.hidden = !ready || !player || player.hidden;
   // Karaoke: when the job finishes, the instrumental/karaoke video replaces the media in the player.
   if (ready && sepBox.checked && player && !player.hidden && audioUrl && autoSwitched !== s.jobId) { autoSwitched = s.jobId!; void switchTo("inst"); }
@@ -107,13 +112,31 @@ async function switchTo(m: "orig" | "inst") {
   if (!player || m === mode || (m === "inst" && !s?.downloadUrl)) return;
   // The original is kept as a blob URL of the IndexedDB copy; recreate it if it was revoked/lost.
   if (m === "orig" && !audioUrl) { const a = await getAudio(); if (!a) return; audioUrl = URL.createObjectURL(a.blob); audioKey = a.name; }
+  let src = audioUrl!;
+  if (m === "inst") { try { src = await instMedia(s!.downloadUrl!); } catch (e) { showError((e as Error).message); return; } }
   const t = player.currentTime, playing = !player.paused;
   mode = m;
-  player.src = mode === "inst" ? s!.downloadUrl! : audioUrl!;
+  player.src = src;
   player.addEventListener("loadedmetadata", () => { player!.currentTime = t; if (playing) void player!.play(); }, { once: true });
   document.body.classList.toggle("karaoke", mode === "inst");
   renderedKey = ""; cur = -1; curLine = null; renderTranscript(lastJob); renderSep(lastJob);
 }
+// Instrumental/karaoke media is fetched with the access token into a blob URL (no token in URLs).
+let instUrl: string | undefined, instFor = "";
+async function instMedia(url: string): Promise<string> {
+  if (instUrl && instFor === url) return instUrl;
+  const u = await fetchMediaUrl(url);
+  if (instUrl) URL.revokeObjectURL(instUrl);
+  instUrl = u; instFor = url; renderSep(lastJob);
+  return u;
+}
+sepDl.addEventListener("click", async (e) => {
+  const url = lastJob.sep?.downloadUrl;
+  if (!url || (instUrl && instFor === url)) return;   // already a blob URL: the browser downloads it
+  e.preventDefault();
+  try { const u = await instMedia(url); const a = document.createElement("a"); a.href = u; a.download = sepDl.download; a.click(); }
+  catch (err) { showError((err as Error).message); }
+});
 let autoSwitched = "";  // sep job id the player was switched to automatically (once; Original stays a manual choice)
 sepMode.addEventListener("click", () => void switchTo(mode === "inst" ? "orig" : "inst"));
 
@@ -149,7 +172,7 @@ async function start(file: File) {
   const separate = sepBox.checked;  // vocal removal only when the user opted in
   // Plain Deepgram request (no translate=): the transcript comes back as fast as ASR allows;
   // the service worker then translates the timed sentences progressively via /v1/translate.
-  const url = `${base}/v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true&paragraphs=true`;
+  const url = apiUrl(base, `v1/listen?language=${encodeURIComponent(lang.value)}&utterances=true&paragraphs=true`);
   await chrome.storage.session.set({ job: { phase: "running", fileName: file.name, startedAt: Date.now(), translateTo, ...(separate ? { separate } : {}) } satisfies JobState });
   const reply = await chrome.runtime.sendMessage({ type: "transcribe", url, mime, base, language: lang.value, translateTo, separate }).catch((e) => ({ err: String(e) }));
   // A service worker left over from an older build still answers, but ignores translateTo.
@@ -172,6 +195,8 @@ function resetPlayers() {
   for (const el of [audioEl, videoEl]) { el.pause(); el.removeAttribute("src"); el.load(); el.hidden = true; }
   if (audioUrl) URL.revokeObjectURL(audioUrl);
   audioUrl = undefined; audioKey = "";
+  if (instUrl) URL.revokeObjectURL(instUrl);
+  instUrl = undefined; instFor = "";
 }
 
 let staleWorker = "";
@@ -378,7 +403,8 @@ async function loadVersions() {
   const ext = `Extension ${chrome.runtime.getManifest().version}`;
   versions.textContent = `${ext} · service: loading…`;
   try {
-    const r = await fetch(`${baseUrl()}/v1/info`, { signal: AbortSignal.timeout(5000) });
+    const r = await apiFetch(apiUrl(baseUrl(), "v1/info"), { signal: AbortSignal.timeout(5000) });
+    if (isAuthError(r.status)) { versions.textContent = `${ext} · ${AUTH_MSG}`; return; }
     if (r.status === 404) { versions.textContent = `${ext} · service predates /v1/info (redeploy)`; return; }
     const i = await r.json();
     versions.textContent = `${ext} · Service ${i.service_version} · Model ${i.model} · NeMo ${i.nemo_version} · torch ${i.torch_version}` +

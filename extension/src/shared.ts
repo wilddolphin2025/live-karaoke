@@ -4,6 +4,35 @@ export const BUILD: string = typeof __BUILD__ === "string" ? __BUILD__ : "dev";
 declare const __DEFAULT_SERVER__: string;
 // Empty unless the build sets LK_SERVER (extension/local.env): first run then opens Settings.
 export const DEFAULT_SERVER: string = typeof __DEFAULT_SERVER__ === "string" ? __DEFAULT_SERVER__ : "";
+// ---- Server access (0.7.0): optional Bearer token for a protected public edge, and base URLs with a path
+// prefix (e.g. https://edge.example/karaoke). Never `new URL("/v1/..", base)`: that drops the prefix.
+export const AUTH_MSG = "Access token missing or invalid — check Settings";
+export const isAuthError = (status: number) => status === 401 || status === 403;
+/** base (with or without a trailing slash, may include a path) + "v1/..." -> base/v1/... */
+export function apiUrl(base: string, path: string): string {
+  return `${base.trim().replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+/** A server-returned link (absolute, or root-relative to the API like "/v1/jobs/x/download") under the base. */
+export function resolveServerUrl(base: string, link: string): string {
+  return /^https?:\/\//i.test(link) ? link : apiUrl(base, link);
+}
+export function authHeaders(token: string | undefined, h: Record<string, string> = {}): Record<string, string> {
+  const t = (token ?? "").trim();
+  return t ? { ...h, Authorization: `Bearer ${t}` } : { ...h };
+}
+export const getToken = async (): Promise<string> => ((await chrome.storage.local.get({ token: "" })).token as string) ?? "";
+/** fetch() to the Live Karaoke server: adds the Bearer token (if set). Use for every server request. */
+export async function apiFetch(url: string, init: RequestInit & { headers?: Record<string, string> } = {}): Promise<Response> {
+  return fetch(url, { ...init, headers: authHeaders(await getToken(), init.headers) });
+}
+/** Download server media with the token into an object URL (media elements can't send headers). */
+export async function fetchMediaUrl(url: string): Promise<string> {
+  const r = await apiFetch(url);
+  if (isAuthError(r.status)) throw new Error(AUTH_MSG);
+  if (!r.ok) throw new Error(`Error ${r.status} downloading the file`);
+  return URL.createObjectURL(await r.blob());
+}
+
 export const LANGS = ["auto","bg","cs","da","de","el","en","es","et","fi","fr","hr","hu","it","lt","lv","mt","nl","pl","pt","ro","ru","sk","sl","sv","uk"];
 
 // Target languages offered in the UI: the 55 that google/translategemma-4b-it was evaluated on (WMT24++);
@@ -151,7 +180,7 @@ export function applyJob(s: SeparationState, j: any): SeparationState {
     : ["queued", "separating", "transcribing", "muxing", "done"].includes(st) ? st : s.status;
   const next: SeparationState = { ...s, status, progress: Number(j?.progress ?? s.progress) || 0, stage: j?.stage ?? s.stage,
     device: j?.device ?? s.device, model: j?.model ?? s.model, isVideo: j?.is_video ?? s.isVideo, size: j?.size ?? s.size };
-  if (j?.download_url) next.downloadUrl = s.base + j.download_url;
+  if (j?.download_url) next.downloadUrl = resolveServerUrl(s.base, j.download_url);
   if (status === "error") next.error = j?.error?.err_msg ?? "failed";
   if (status === "done") { next.words = j?.result?.words ?? []; next.utterances = j?.result?.utterances ?? []; next.progress = 1; }
   return next;
