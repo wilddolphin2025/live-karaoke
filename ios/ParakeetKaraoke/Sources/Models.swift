@@ -46,6 +46,11 @@ final class KaraokeBundle {
     var artist: String? = nil
     /// The user marked the original as music (enables music-only features without a karaoke stem).
     var markedAsMusic: Bool = false
+    /// Live upload state (bytes) while a file is being sent to the server; 0 when not uploading.
+    var uploadSent: Int64 = 0
+    var uploadTotal: Int64 = 0
+    /// Upload finished, waiting for the server's answer (indeterminate).
+    var serverWaiting: Bool = false
 
     init(title: String, originalFile: String, isVideo: Bool, language: String) {
         self.id = UUID()

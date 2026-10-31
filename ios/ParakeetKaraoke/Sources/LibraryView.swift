@@ -181,10 +181,7 @@ struct BundleRow: View {
                 case .error:
                     Label(bundle.statusText, systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote).foregroundStyle(.red).lineLimit(2)
-                default:
-                    ProgressView(value: bundle.progress) {
-                        Text(bundle.statusText).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
-                    }
+                default: BundleProgressView(bundle: bundle)
                 }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
@@ -246,5 +243,46 @@ struct NewBundleView: View {
         guard let u = URL(string: link.trimmingCharacters(in: .whitespaces)), u.scheme?.hasPrefix("http") == true else { error = "Enter an http(s) link"; return }
         _ = Processor.shared.importURL(u, title: title, language: language, context: ctx)
         dismiss()
+    }
+}
+
+/// Pipeline status for a song that is not ready: a linear bar with byte counts while uploading,
+/// a spinner while waiting for the server, and the overall bar otherwise. Used in the library row and the player.
+struct BundleProgressView: View {
+    let bundle: KaraokeBundle
+
+    static func mb(_ n: Int64) -> String { String(format: "%.1f", Double(n) / 1_000_000) }
+    static func uploadText(_ prefix: String, sent: Int64, total: Int64) -> String {
+        let pct = total > 0 ? Int(Double(sent) / Double(total) * 100) : 0
+        return "\(prefix) \(pct)% · \(mb(sent)) of \(mb(total)) MB"
+    }
+
+    var body: some View {
+        if bundle.uploadTotal > 0 {
+            let f = min(1, Double(bundle.uploadSent) / Double(bundle.uploadTotal))
+            ProgressView(value: f) {
+                Text(Self.uploadText(bundle.statusText, sent: bundle.uploadSent, total: bundle.uploadTotal))
+                    .font(.footnote).monospacedDigit().foregroundStyle(.secondary).lineLimit(2)
+            }
+            .progressViewStyle(.linear)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(bundle.statusText.replacingOccurrences(of: "…", with: ""))
+            .accessibilityValue("\(Int(f * 100)) percent, \(Self.mb(bundle.uploadSent)) of \(Self.mb(bundle.uploadTotal)) megabytes")
+            .accessibilityIdentifier("uploadProgress")
+        } else if bundle.serverWaiting {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(bundle.statusText).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(bundle.statusText.replacingOccurrences(of: "…", with: ""))
+            .accessibilityValue("In progress")
+            .accessibilityIdentifier("serverWaiting")
+        } else {
+            ProgressView(value: bundle.progress) {
+                Text(bundle.statusText).font(.footnote).monospacedDigit().foregroundStyle(.secondary).lineLimit(2)
+            }
+            .progressViewStyle(.linear)
+        }
     }
 }

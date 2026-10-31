@@ -73,11 +73,30 @@ struct ParakeetAPI {
         return String(decoding: d.prefix(200), as: UTF8.self)
     }
 
+    /// Upload progress: (bytes sent, total bytes).
+    typealias UploadProgress = @Sendable (Int64, Int64) -> Void
+
+    /// Per-task delegate reporting request-body progress, throttled to whole-percent steps.
+    final class UploadDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        let onProgress: UploadProgress
+        private var lastPct = -1
+        init(_ onProgress: @escaping UploadProgress) { self.onProgress = onProgress }
+        func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                        totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+            let total = max(totalBytesExpectedToSend, totalBytesSent)
+            let pct = total > 0 ? Int(totalBytesSent * 100 / total) : 0
+            guard pct != lastPct || totalBytesSent == total else { return }
+            lastPct = pct
+            onProgress(totalBytesSent, total)
+        }
+    }
+
     /// Sends a request, retrying 503 + Retry-After (translator warming up / busy).
-    func send(_ req: URLRequest, file: URL? = nil, body: Data? = nil, onWait: ((String) -> Void)? = nil) async throws -> (Data, HTTPURLResponse) {
+    func send(_ req: URLRequest, file: URL? = nil, body: Data? = nil, onWait: ((String) -> Void)? = nil,
+              onUpload: UploadProgress? = nil) async throws -> (Data, HTTPURLResponse) {
         for attempt in 1...20 {
             let (d, r): (Data, URLResponse)
-            if let file { (d, r) = try await Self.session.upload(for: req, fromFile: file) }
+            if let file { (d, r) = try await Self.session.upload(for: req, fromFile: file, delegate: onUpload.map(UploadDelegate.init)) }
             else if let body { (d, r) = try await Self.session.upload(for: req, from: body) }
             else { (d, r) = try await Self.session.data(for: req) }
             guard let h = r as? HTTPURLResponse else { throw APIError.message("No HTTP response") }
@@ -107,10 +126,10 @@ struct ParakeetAPI {
     }
 
     struct ListenResult { var words: [Word]; var duration: Double; var detected: String? }
-    func listen(file: URL, language: String, onWait: ((String) -> Void)?) async throws -> ListenResult {
+    func listen(file: URL, language: String, onWait: ((String) -> Void)?, onUpload: UploadProgress? = nil) async throws -> ListenResult {
         var r = request("v1/listen", ["language": language, "paragraphs": "true", "punctuate": "true"], method: "POST")
         r.setValue(Self.mime(file), forHTTPHeaderField: "Content-Type")
-        let (d, _) = try await send(r, file: file, onWait: onWait)
+        let (d, _) = try await send(r, file: file, onWait: onWait, onUpload: onUpload)
         let j = try JSONSerialization.jsonObject(with: d) as? [String: Any] ?? [:]
         let ch = ((j["results"] as? [String: Any])?["channels"] as? [[String: Any]])?.first
         let alt = (ch?["alternatives"] as? [[String: Any]])?.first
@@ -118,11 +137,11 @@ struct ParakeetAPI {
         return ListenResult(words: Self.decodeWords(alt?["words"]), duration: dur, detected: ch?["detected_language"] as? String)
     }
 
-    func separate(file: URL, name: String, language: String, onWait: ((String) -> Void)?) async throws -> String {
+    func separate(file: URL, name: String, language: String, onWait: ((String) -> Void)?, onUpload: UploadProgress? = nil) async throws -> String {
         var r = request("v1/separate", ["language": language], method: "POST")
         r.setValue(Self.mime(file), forHTTPHeaderField: "Content-Type")
         r.setValue(name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "file", forHTTPHeaderField: "X-Filename")
-        let (d, _) = try await send(r, file: file, onWait: onWait)
+        let (d, _) = try await send(r, file: file, onWait: onWait, onUpload: onUpload)
         let j = try JSONSerialization.jsonObject(with: d) as? [String: Any] ?? [:]
         guard let id = j["job_id"] as? String else { throw APIError.message("No job_id in response") }
         return id

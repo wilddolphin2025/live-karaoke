@@ -57,7 +57,23 @@ final class Processor {
     }
 
     private func set(_ b: KaraokeBundle, _ s: BundleStatus, _ text: String, _ p: Double, _ ctx: ModelContext) {
-        b.status = s; b.statusText = text; b.progress = p; try? ctx.save()
+        b.status = s; b.statusText = text; b.progress = p
+        b.uploadSent = 0; b.uploadTotal = 0; b.serverWaiting = false
+        try? ctx.save()
+    }
+
+    /// Two-phase upload status: "<uploading>… 42% · x of y MB", then `waiting` (indeterminate) once the body is sent.
+    private func uploadReporter(_ b: KaraokeBundle, file: URL, uploading: String, waiting: String) -> ParakeetAPI.UploadProgress {
+        let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+        b.statusText = uploading; b.uploadSent = 0; b.uploadTotal = size; b.serverWaiting = false
+        return { [weak b] sent, total in
+            Task { @MainActor in
+                guard let b, !b.serverWaiting else { return }
+                if sent >= total {
+                    b.uploadSent = 0; b.uploadTotal = 0; b.serverWaiting = true; b.statusText = waiting
+                } else { b.uploadSent = sent; b.uploadTotal = total }
+            }
+        }
     }
 
     private func run(_ b: KaraokeBundle, context ctx: ModelContext) async {
@@ -84,7 +100,9 @@ final class Processor {
             // 1. Transcript of the original (normal highlight).
             if b.originalWords.isEmpty {
                 set(b, .transcribing, "Transcribing…", 0.05, ctx)
-                let res = try await api.listen(file: b.originalURL, language: b.language, onWait: wait)
+                let up = uploadReporter(b, file: b.originalURL, uploading: "Uploading…", waiting: "Transcribing…")
+                let res = try await api.listen(file: b.originalURL, language: b.language, onWait: wait, onUpload: up)
+                b.uploadSent = 0; b.uploadTotal = 0; b.serverWaiting = false
                 b.originalWords = res.words
                 if b.duration <= 0 { b.duration = res.duration }
                 b.detectedLanguage = res.detected
@@ -95,7 +113,8 @@ final class Processor {
             if b.karaokeFile == nil {
                 if b.jobId == nil {
                     set(b, .separating, "Uploading for vocal removal…", 0.1, ctx)
-                    b.jobId = try await api.separate(file: b.originalURL, name: b.originalFile, language: b.language, onWait: wait)
+                    let up = uploadReporter(b, file: b.originalURL, uploading: "Uploading for vocal removal…", waiting: "Starting vocal removal…")
+                    b.jobId = try await api.separate(file: b.originalURL, name: b.originalFile, language: b.language, onWait: wait, onUpload: up)
                     try? ctx.save()
                 }
                 var misses = 0
@@ -131,7 +150,7 @@ final class Processor {
                 }
             }
             set(b, .ready, "Ready to sing", 1, ctx)
-        } catch is CancellationError {
+        } catch let e where e is CancellationError || (e as? URLError)?.code == .cancelled {
             set(b, .error, "Cancelled", b.progress, ctx)
         } catch {
             b.errorText = error.localizedDescription

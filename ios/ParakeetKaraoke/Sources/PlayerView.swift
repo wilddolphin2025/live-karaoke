@@ -145,6 +145,9 @@ struct PlayerView: View {
 
     private var controls: some View {
         VStack(spacing: 12) {
+            if bundle.status != .ready && bundle.status != .error {
+                BundleProgressView(bundle: bundle).frame(maxWidth: .infinity, alignment: .leading)
+            }
             features.lyricsControl(bundle: bundle, karaoke: karaoke) { replacementLines = $0 }
             if isRecording { features.recordingHint() }
             if let trStatus, showTranslation {
