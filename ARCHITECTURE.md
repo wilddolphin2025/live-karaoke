@@ -156,6 +156,16 @@ NeMo `transcribe(..., timestamps=True)` gives `hyp.timestamp["word"]` with start
   Opening a file URL (Files/share) imports it.
 - `Info.plist`: background audio, file sharing, Local Network usage description, ATS allows HTTP.
 
+### Optional add-ons (`PremiumHooks.swift`)
+`PremiumFeatures` is the only coupling to optional add-on features: extra SwiftData model types, a
+lyrics provider (a control that may hand the player replacement lyric lines with timed words), a
+recorder entry point shown on the karaoke track, extra Settings rows, a recordings list, and a UI-test
+seeding hook. The public build uses `NoPremium` (all no-ops). A private build compiles
+`PremiumBridge.swift` (`#if PREMIUM`) against a separately licensed package; see BUILD.md (`LK_PREMIUM`).
+Translations of replacement lines are cached under a `v`-prefixed key (`vk|en`) so they never mix with
+transcript translations. Files the app writes to Documents are visible in the Files app
+(`UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace`).
+
 ## Configuration (env vars)
 
 | var | default | where |

@@ -26,6 +26,12 @@ Docs: **[BUILD.md](BUILD.md)** (build everything from scratch) · **[ARCHITECTUR
 - Extension: drag-and-drop transcription, playback with word highlighting, translation pane, karaoke swap in place, side panel.
 - iOS app: a library of karaoke bundles (Files or URL import), karaoke/original toggle, timed translation, and deep links.
 
+### Privacy (iOS app)
+The public app sends audio only to the server you configure. Optional add-on builds (see BUILD.md,
+`LK_PREMIUM`) may look up official lyrics on [LRCLIB](https://lrclib.net) when online, sending only the
+song title, artist and duration (never audio), and may record your voice locally when you tap Record
+(microphone permission; recordings stay on the device and appear in the Files app).
+
 ### Known limitations / unverified
 - **iOS:** on the test clip, the karaoke video shows a **black frame** (audio plays). Not yet diagnosed.
 - **iOS:** the **Files picker** import path is untested. URL import and deep links were tested.

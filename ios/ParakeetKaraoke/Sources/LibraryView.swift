@@ -11,7 +11,8 @@ struct LibraryView: View {
     @State private var newName = ""
     @AppStorage("defaultLanguage") private var defaultLanguage = "auto"
 
-    enum Route: Hashable { case player(UUID, Bool), settings }
+    enum Route: Hashable { case player(UUID, Bool), settings, recordings }
+    private let features = PremiumHost.features
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -26,10 +27,17 @@ struct LibraryView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button { showNew = true } label: { Label("Add Song", systemImage: "plus") }
                 }
+                if features.recordingsView(bundleId: nil) != nil {
+                    ToolbarItem(placement: .secondaryAction) {
+                        Button { path.append(.recordings) } label: { Label("My Recordings", systemImage: "waveform") }
+                            .accessibilityIdentifier("libraryRecordings")
+                    }
+                }
             }
             .navigationDestination(for: Route.self) { r in
                 switch r {
                 case .settings: SettingsView()
+                case .recordings: features.recordingsView(bundleId: nil)
                 case .player(let id, let karaoke):
                     if let b = bundles.first(where: { $0.id == id }) { PlayerView(bundle: b, startKaraoke: karaoke) }
                 }
@@ -78,6 +86,11 @@ struct LibraryView: View {
                         .contextMenu {
                             Button { newName = b.title; renaming = b } label: { Label("Rename", systemImage: "pencil") }
                             if b.status == .error { Button { Processor.shared.start(b, context: ctx) } label: { Label("Retry", systemImage: "arrow.clockwise") } }
+                            if b.karaokeFile == nil && features.recordingsView(bundleId: nil) != nil {
+                                Toggle(isOn: Binding(get: { b.markedAsMusic }, set: { b.markedAsMusic = $0; try? ctx.save() })) {
+                                    Label("Song with Music", systemImage: "music.note")
+                                }
+                            }
                             if b.status == .ready { ShareLink(item: b.karaokeURL ?? b.originalURL) { Label("Share", systemImage: "square.and.arrow.up") } }
                             Divider()
                             Button(role: .destructive) { delete(b) } label: { Label("Delete", systemImage: "trash") }
@@ -121,6 +134,9 @@ struct LibraryView: View {
             let i = Int(q["index"] ?? "0") ?? 0
             if i < bundles.count { path = []; open(bundles[i], karaoke: q["mode"].map { $0 != "original" }) }
         case "settings": path = [.settings]
+        case "recordings": path = [.recordings]
+        case "player":
+            if let id = q["id"].flatMap(UUID.init), let b = bundles.first(where: { $0.id == id }) { path = []; open(b, karaoke: q["mode"].map { $0 != "original" }) }
         case "new": showNew = true
         default: break
         }

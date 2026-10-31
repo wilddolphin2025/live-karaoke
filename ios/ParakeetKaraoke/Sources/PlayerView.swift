@@ -66,15 +66,20 @@ struct PlayerView: View {
     @AppStorage(LyricScale.key) private var lyricScale = LyricScale.default
     @AppStorage("highlightLead") private var lead = 0.25
     @State private var trStatus: String?
+    @State private var replacementLines: [[Word]]?   // from PremiumFeatures.lyricsControl
+    @State private var isRecording = false
+    @State private var showRecordings = false
+    private let features = PremiumHost.features
 
     init(bundle: KaraokeBundle, startKaraoke: Bool) {
         self.bundle = bundle
         _karaoke = State(initialValue: startKaraoke && bundle.karaokeFile != nil)
     }
 
-    private var words: [Word] { karaoke ? bundle.vocalsWords : bundle.originalWords }
-    private var lines: [LyricLine] { Lyrics.lines(words) }
-    private var translation: [String]? { showTranslation ? bundle.translations["\(karaoke ? "k" : "o")|\(target)"] : nil }
+    private var words: [Word] { replacementLines.map { $0.flatMap { $0 } } ?? (karaoke ? bundle.vocalsWords : bundle.originalWords) }
+    private var lines: [LyricLine] { replacementLines.map { Lyrics.lines(grouped: $0) } ?? Lyrics.lines(words) }
+    private var variant: String { replacementLines == nil ? "" : "v" }
+    private var translation: [String]? { showTranslation ? bundle.translations["\(variant)\(karaoke ? "k" : "o")|\(target)"] : nil }
     private var mediaURL: URL { karaoke ? (bundle.karaokeURL ?? bundle.originalURL) : bundle.originalURL }
 
     var body: some View {
@@ -111,6 +116,9 @@ struct PlayerView: View {
                         ForEach(Langs.targets, id: \.code) { Text($0.name).tag($0.code) }
                     } label: { Label("Translate To", systemImage: "globe") }
                     .pickerStyle(.menu)
+                    if features.recordingsView(bundleId: nil) != nil {
+                        Button { showRecordings = true } label: { Label("My Recordings", systemImage: "waveform") }
+                    }
                     Section("Text Size") {
                         Button { lyricScale = min(LyricScale.range.upperBound, lyricScale + 0.1) } label: { Label("Larger", systemImage: "textformat.size.larger") }
                         Button { lyricScale = max(LyricScale.range.lowerBound, lyricScale - 0.1) } label: { Label("Smaller", systemImage: "textformat.size.smaller") }
@@ -124,13 +132,21 @@ struct PlayerView: View {
         .onDisappear { model.player.pause() }
         .onChange(of: karaoke) { model.load(mediaURL, keepPosition: true) }
         .sensoryFeedback(.selection, trigger: karaoke)
-        .task(id: "\(showTranslation)\(target)\(karaoke)") {
-            if showTranslation { await Processor.shared.translate(bundle, karaoke: karaoke, target: target) { trStatus = $0 } }
+        .task(id: "\(showTranslation)\(target)\(karaoke)\(variant)") {
+            if showTranslation {
+                await Processor.shared.translate(bundle, karaoke: karaoke, target: target,
+                                                 lines: replacementLines == nil ? nil : lines, variant: variant) { trStatus = $0 }
+            }
+        }
+        .sheet(isPresented: $showRecordings) {
+            if let v = features.recordingsView(bundleId: bundle.id) { NavigationStack { v } }
         }
     }
 
     private var controls: some View {
         VStack(spacing: 12) {
+            features.lyricsControl(bundle: bundle, karaoke: karaoke) { replacementLines = $0 }
+            if isRecording { features.recordingHint() }
             if let trStatus, showTranslation {
                 Text(trStatus).font(.footnote).foregroundStyle(.secondary)
             }
@@ -140,6 +156,7 @@ struct PlayerView: View {
                     Text("Karaoke").tag(true)
                 }
                 .pickerStyle(.segmented)
+                .disabled(isRecording)
             }
             Scrubber(model: model, clock: model.clock, fallbackDuration: bundle.duration)
             HStack {
@@ -157,6 +174,7 @@ struct PlayerView: View {
                 Button { model.seek(model.time + 10) } label: { Image(systemName: "goforward.10").font(.title) }
                     .accessibilityLabel("Forward 10 seconds")
                 Spacer()
+                if karaoke { features.recordButton(bundle: bundle, player: model, isRecording: $isRecording) }
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.primary)

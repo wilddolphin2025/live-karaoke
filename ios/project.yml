@@ -10,8 +10,8 @@ settings:
   base:
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.1.0"
-    CURRENT_PROJECT_VERSION: "3"
+    MARKETING_VERSION: "1.2.0"
+    CURRENT_PROJECT_VERSION: "4"
 targets:
   ParakeetKaraoke:
     type: application
@@ -34,6 +34,7 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         NSLocalNetworkUsageDescription: Karaoke talks to your Parakeet server on the local network to transcribe songs and remove vocals.
+        NSMicrophoneUsageDescription: Live Karaoke uses the microphone only when you record yourself singing along. Recordings stay on your device.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true

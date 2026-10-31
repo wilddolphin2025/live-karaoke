@@ -42,7 +42,10 @@ final class KaraokeBundle {
     @Attribute(.externalStorage) var thumbnail: Data?
     var originalWordsData: Data?
     var vocalsWordsData: Data?
-    var translationsData: Data?   // [String: [String]]  key "mode|target" -> one per line
+    var translationsData: Data?   // [String: [String]]  key "[variant]mode|target" -> one per line
+    var artist: String? = nil
+    /// The user marked the original as music (enables music-only features without a karaoke stem).
+    var markedAsMusic: Bool = false
 
     init(title: String, originalFile: String, isVideo: Bool, language: String) {
         self.id = UUID()
@@ -118,6 +121,13 @@ enum Lyrics {
     }
 
     /// Index of the word to highlight at time t (port of the extension's wordAt), -1 in a pause.
+    /// Lines from pre-grouped words (e.g. lyrics with known line breaks).
+    static func lines(grouped: [[Word]]) -> [LyricLine] {
+        var out: [LyricLine] = [], first = 0
+        for g in grouped where !g.isEmpty { out.append(LyricLine(id: out.count, firstWord: first, words: g)); first += g.count }
+        return out
+    }
+
     static func wordAt(_ words: [Word], t: Double, lead: Double, pause: Double = 0.3) -> Int {
         let x = t + lead
         var i = -1, lo = 0, hi = words.count - 1

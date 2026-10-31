@@ -50,6 +50,7 @@ struct SettingsView: View {
             } header: { Text("Lyrics") } footer: {
                 Text("Lyrics also follow the system text size (Settings > Accessibility > Display & Text Size). Highlight lead shows each word slightly before it is sung.")
             }
+            PremiumHost.features.settingsRows()
             Section("About") {
                 LabeledContent("Version", value: "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"))")
                 if let info {

@@ -120,7 +120,7 @@ Any other origin triggers a one-time permission prompt. To update: rebuild, then
 Needs macOS, Xcode 15+ (iOS 17 SDK) and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 ```bash
 brew install xcodegen
-cd ios && xcodegen                   # generates ParakeetKaraoke.xcodeproj from project.yml
+cd ios && ./scripts/generate.sh     # runs xcodegen: ParakeetKaraoke.xcodeproj from project.yml
 open ParakeetKaraoke.xcodeproj
 ```
 **Signing:** `DEVELOPMENT_TEAM` comes from `ios/Local.xcconfig` (gitignored; copy `ios/Local.xcconfig.example`) with automatic signing and the bundle id
@@ -130,6 +130,17 @@ DEVELOPMENT_TEAM: <YOUR_TEAM_ID>
 bundleIdPrefix: com.example
 PRODUCT_BUNDLE_IDENTIFIER: com.example.parakeetkaraoke
 ```
+**Optional private add-on (`LK_PREMIUM`), not needed for forks:** the app has a small hook layer
+(`PremiumFeatures` in `Sources/PremiumHooks.swift`) whose default does nothing, and it builds and runs
+completely without any add-on. The maintainer's private `LiveKaraokePremium` package is linked only
+when the gitignored `ios/Local.xcconfig` contains
+```
+LK_PREMIUM = 1
+LK_PREMIUM_PATH = ../../live-karaoke-premium   # package path relative to ios/
+```
+`scripts/generate.sh` then writes a gitignored `project.premium.yml` (includes `project.yml`, adds the
+package, the `PREMIUM` Swift flag and the package's UI tests). Without these lines it just runs `xcodegen`.
+
 **Simulator** (standard Xcode tooling):
 ```bash
 xcodebuild -project ParakeetKaraoke.xcodeproj -scheme ParakeetKaraoke -destination 'platform=iOS Simulator,name=iPhone 15' -derivedDataPath build build
@@ -167,6 +178,7 @@ DRY_RUN=1 deploy/deploy.sh                            # render manifests only, p
 | `YOUR_SERVER_IP:30800` | Server URL the clients use (NodePort 30800) | extension/iOS Settings | `http://192.0.2.10:30800` | `ASR_HOST_IP` + `kubectl get svc` |
 | `LK_SERVER`, `LK_EXTRA_ORIGINS` | Extension default server and extra host permissions, baked in at build | `extension/local.env` (optional) | `http://192.0.2.10:30800`, `https://gpubox/*` | as above; without them the first run opens Settings |
 | `DEVELOPMENT_TEAM` | Apple signing team ID | `ios/Local.xcconfig` | `ABCDE12345` | Xcode → Settings → Accounts, or developer.apple.com → Account → Membership |
+| `LK_PREMIUM`, `LK_PREMIUM_PATH` | Optional, private: link the maintainer's add-on package (not needed for forks) | `ios/Local.xcconfig` (optional) | `1`, `../../live-karaoke-premium` | leave unset |
 | `LK_DEFAULT_SERVER` | iOS default server (write `//` as `/$()/`) | `ios/Local.xcconfig` | `http:/$()/192.0.2.10:30800` | as above |
 | TLS cert/key | Self-signed cert for `https://ASR_HOSTNAME` | `deploy/tls/` (gitignored) | `deploy/tls/gpubox.crt` | `deploy/make-cert.sh` (openssl), or `mkcert gpubox 192.0.2.10` |
 

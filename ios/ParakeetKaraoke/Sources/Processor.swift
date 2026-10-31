@@ -152,10 +152,12 @@ final class Processor {
         }
     }
 
-    func translate(_ b: KaraokeBundle, karaoke: Bool, target: String, onStatus: @escaping (String?) -> Void) async {
-        let key = "\(karaoke ? "k" : "o")|\(target)"
+    /// Translate the shown lines. `lines`/`variant` override the transcript (e.g. lyrics from an add-on).
+    func translate(_ b: KaraokeBundle, karaoke: Bool, target: String, lines shown: [LyricLine]? = nil, variant: String = "",
+                   onStatus: @escaping (String?) -> Void) async {
+        let key = "\(variant)\(karaoke ? "k" : "o")|\(target)"
         if b.translations[key] != nil { return }
-        let lines = Lyrics.lines(karaoke ? b.vocalsWords : b.originalWords)
+        let lines = shown ?? Lyrics.lines(karaoke ? b.vocalsWords : b.originalWords)
         guard !lines.isEmpty, let api = try? ParakeetAPI() else { return }
         var out = [String]()
         do {
